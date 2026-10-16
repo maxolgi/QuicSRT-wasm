@@ -36,8 +36,21 @@ handle.addEventListener('error', (e) => {
     status.textContent = `error: ${msg ?? 'unknown'}`;
 });
 handle.addEventListener('stats', (e) => {
-    const s = (e as CustomEvent<{ stats: { rttMs: number; rxData: number; rxBytes: number } }>).detail.stats;
-    stats.textContent = `rtt ${s.rttMs.toFixed(1)} ms | rx ${s.rxData} msg / ${(s.rxBytes / 1e6).toFixed(1)} MB`;
+    // All 17 SrtwStats fields from the engine's getStats(), camelCase as
+    // delivered by the worker's StatsMsg.
+    const s = (e as CustomEvent<{ stats: {
+        elapsedMs: number; rttMs: number; bandwidthBps: number;
+        rxData: number; rxBytes: number; rxLoss: number; rxRetransmit: number;
+        rxDropped: number; rxAck: number; rxNak: number; rxBuffered: number; rxBelated: number;
+        txData: number; txBytes: number; txRetransmit: number; txLoss: number; txBuffered: number;
+    } }>).detail.stats;
+    stats.textContent =
+        `rtt ${s.rttMs.toFixed(1)}ms | bw ${(s.bandwidthBps / 1e6).toFixed(1)}Mbps | elapsed ${(s.elapsedMs / 1000).toFixed(1)}s`
+        + ` ; rx: ${s.rxData} msg ${(s.rxBytes / 1e6).toFixed(1)}MB`
+        + ` loss ${s.rxLoss} retrans ${s.rxRetransmit} drop ${s.rxDropped}`
+        + ` ack ${s.rxAck} nak ${s.rxNak} buffered ${s.rxBuffered} belated ${s.rxBelated}`
+        + ` ; tx: ${s.txData} msg ${(s.txBytes / 1e6).toFixed(1)}MB`
+        + ` loss ${s.txLoss} retrans ${s.txRetransmit} buffered ${s.txBuffered}`;
 });
 canvas.addEventListener('click', () => handle.setMuted(!handle.muted));
 
