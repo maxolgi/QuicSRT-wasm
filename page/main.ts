@@ -35,20 +35,34 @@ handle.addEventListener('error', (e) => {
 });
 handle.addEventListener('stats', (e) => {
     // All 17 SrtwStats fields from the engine's getStats(), camelCase as
-    // delivered by the worker's StatsMsg.
+    // delivered by the worker's StatsMsg - one line per field in the
+    // right-side overlay panel (label padded left, value right of it).
     const s = (e as CustomEvent<{ stats: {
         elapsedMs: number; rttMs: number; bandwidthBps: number;
         rxData: number; rxBytes: number; rxLoss: number; rxRetransmit: number;
         rxDropped: number; rxAck: number; rxNak: number; rxBuffered: number; rxBelated: number;
         txData: number; txBytes: number; txRetransmit: number; txLoss: number; txBuffered: number;
     } }>).detail.stats;
-    stats.textContent =
-        `rtt ${s.rttMs.toFixed(1)}ms | bw ${(s.bandwidthBps / 1e6).toFixed(1)}Mbps | elapsed ${(s.elapsedMs / 1000).toFixed(1)}s`
-        + ` ; rx: ${s.rxData} msg ${(s.rxBytes / 1e6).toFixed(1)}MB`
-        + ` loss ${s.rxLoss} retrans ${s.rxRetransmit} drop ${s.rxDropped}`
-        + ` ack ${s.rxAck} nak ${s.rxNak} buffered ${s.rxBuffered} belated ${s.rxBelated}`
-        + ` ; tx: ${s.txData} msg ${(s.txBytes / 1e6).toFixed(1)}MB`
-        + ` loss ${s.txLoss} retrans ${s.txRetransmit} buffered ${s.txBuffered}`;
+    const line = (label: string, value: string) => label.padEnd(13) + value;
+    stats.textContent = [
+        line('rtt', `${s.rttMs.toFixed(1)}ms`),
+        line('bw', `${(s.bandwidthBps / 1e6).toFixed(1)}Mbps`),
+        line('elapsed', `${(s.elapsedMs / 1000).toFixed(1)}s`),
+        line('rxData', `${s.rxData} msg`),
+        line('rxBytes', `${(s.rxBytes / 1e6).toFixed(1)}MB`),
+        line('rxLoss', `${s.rxLoss}`),
+        line('rxRetransmit', `${s.rxRetransmit}`),
+        line('rxDropped', `${s.rxDropped}`),
+        line('rxAck', `${s.rxAck}`),
+        line('rxNak', `${s.rxNak}`),
+        line('rxBuffered', `${s.rxBuffered}`),
+        line('rxBelated', `${s.rxBelated}`),
+        line('txData', `${s.txData} msg`),
+        line('txBytes', `${(s.txBytes / 1e6).toFixed(1)}MB`),
+        line('txLoss', `${s.txLoss}`),
+        line('txRetransmit', `${s.txRetransmit}`),
+        line('txBuffered', `${s.txBuffered}`),
+    ].join('\n');
 });
 canvas.addEventListener('click', () => handle.setMuted(!handle.muted));
 
