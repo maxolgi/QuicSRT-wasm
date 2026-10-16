@@ -7,14 +7,13 @@
 import { mountPlayer } from './vendor/player/index';
 
 const canvas = document.querySelector('canvas')!;
-const status = document.querySelector('#status')!;
 const stats = document.querySelector('#stats')!;
 
 // Hw/sw decode preference. The vendored VideoPipeline reads localStorage
 // 'websrt-hw-mode' when it is built (main thread, at mount) and defaults to
 // prefer-hardware, which throws OperationError on software-only machines.
 // ?decode=software|hardware seeds the preference before mount; the button
-// under the status line flips it and reloads (simplest re-apply).
+// above the stats line flips it and reloads (simplest re-apply).
 const decodeParam = new URLSearchParams(location.search).get('decode');
 if (decodeParam === 'software' || decodeParam === 'hardware') {
     localStorage.setItem('websrt-hw-mode', decodeParam === 'software' ? 'prefer-software' : 'prefer-hardware');
@@ -26,14 +25,13 @@ decodeBtn.addEventListener('click', () => {
     localStorage.setItem('websrt-hw-mode', sw ? 'prefer-hardware' : 'prefer-software');
     location.reload();
 });
-status.after(decodeBtn);
+stats.before(decodeBtn);
 
 const handle = mountPlayer(canvas, { workerUrl: '/bundle/worker.js' });
 
-handle.addEventListener('statechange', () => { status.textContent = handle.state; });
 handle.addEventListener('error', (e) => {
     const msg = (e as CustomEvent<{ message?: string }>).detail?.message;
-    status.textContent = `error: ${msg ?? 'unknown'}`;
+    console.error(`player error: ${msg ?? 'unknown'}`);
 });
 handle.addEventListener('stats', (e) => {
     // All 17 SrtwStats fields from the engine's getStats(), camelCase as

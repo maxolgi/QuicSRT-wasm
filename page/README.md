@@ -13,8 +13,8 @@ WebSRT/web/wasm (the built demuxer wasm pkgs - read-only reference).
   https://127.0.0.1:8443). serve.mjs proxies `/cert-hash.js` from it (fresh
   hash each boot); `?host=`/`?port=`/`?stream=` override.
 - Decode: `?decode=software|hardware` seeds the hw/sw WebCodecs preference
-  (localStorage `websrt-hw-mode`); the `decode: hw/sw` button under the
-  status line flips it (page reloads). Software-only machines need software.
+  (localStorage `websrt-hw-mode`); the `decode: hw/sw` button above the
+  stats line flips it (page reloads). Software-only machines need software.
 - Publish (SRT ingest, any ffmpeg with libsrt; gateway port 9102):
 
       ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -c:v libx264 -preset veryfast -f mpegts "srt://127.0.0.1:9102?streamid=test&mode=caller&latency=120"
