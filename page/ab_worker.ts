@@ -77,6 +77,8 @@ export interface AbFinal {
     lossTotal: number;
     dropTotal: number;
     rxBytesFinal: number;
+    /** Final full getStats() snapshot: all 17 STATS_KEYS, raw values. */
+    finalStats: Record<string, number> | null;
 }
 
 export type AbWorkerMsg =
@@ -554,6 +556,7 @@ function finish(reason: string, error?: string) {
         lossTotal: s ? s.rxLoss : 0,
         dropTotal: s ? s.rxDropped : 0,
         rxBytesFinal: s ? s.rxBytes : 0,
+        finalStats: s,
     };
     post({ type: 'final', engine, final: f });
 }

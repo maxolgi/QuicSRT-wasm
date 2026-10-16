@@ -171,6 +171,22 @@ if (finalMsg.firstDeliverDelayMs === null) fail('firstDeliverDelayMs null');
 if (statsMsgs.length < 1) fail('no 1 Hz stats samples');
 pass(`events (wtReady, handshakeComplete after ${(finalMsg.handshakeDelayMs).toFixed(0)} ms, first deliver after ${(finalMsg.firstDeliverDelayMs).toFixed(0)} ms, ${statsMsgs.length} stats samples)`);
 
+// final full getStats() snapshot: every STATS_KEYS field present, raw number
+const STATS_KEYS = [
+    'elapsedMs', 'rttMs', 'bandwidthBps',
+    'rxData', 'rxBytes', 'rxLoss', 'rxRetransmit', 'rxDropped', 'rxBelated',
+    'rxBuffered', 'rxAck', 'rxNak',
+    'txData', 'txBytes', 'txRetransmit', 'txLoss', 'txBuffered',
+];
+if (!finalMsg.finalStats) fail('final.finalStats missing');
+for (const k of STATS_KEYS) {
+    if (typeof finalMsg.finalStats[k] !== 'number') {
+        fail(`final.finalStats.${k} = ${finalMsg.finalStats[k]}, expected a raw number`);
+    }
+}
+if (finalMsg.finalStats.rxData !== finalMsg.msgs) fail(`finalStats.rxData ${finalMsg.finalStats.rxData} != delivered ${finalMsg.msgs}`);
+pass(`final stats snapshot (all 17 raw fields, rxData=${finalMsg.finalStats.rxData})`);
+
 if (finalMsg.lossTotal !== 0) fail(`rxLoss = ${finalMsg.lossTotal}, expected 0`);
 if (finalMsg.dropTotal !== 0) fail(`rxDropped = ${finalMsg.dropTotal}, expected 0`);
 if (finalMsg.rxBytesFinal < finalMsg.bytes) fail(`rxBytes ${finalMsg.rxBytesFinal} < delivered ${finalMsg.bytes}`);

@@ -11,6 +11,9 @@
 //     the aligned-window view - per-wall-second bucket digests compared over
 //     seconds interior to BOTH engines (each engine's first/last active
 //     second is excluded: session join/leave edges differ by construction).
+//   - "final stats" lines: each engine's FINAL full getStats() snapshot
+//     (all 17 fields, raw values, fixed key order) so every bw/ack/nak/
+//     buffered/belated/tx* field can be diffed Rust-vs-C++ directly.
 //
 // Two live sessions receive independent copies of the stream, so full-run
 // hashes match only when both engines joined at the same content offset -
@@ -22,6 +25,15 @@
 import type { AbFinal, AbWorkerMsg, StatsSample, Bucket } from './ab_worker';
 
 type Engine = 'rust' | 'cpp';
+
+// Same order as ab_worker's STATS_KEYS (both engines return exactly these
+// keys) so the rust and cpp "final stats" lines align field-by-field.
+const FINAL_STATS_KEYS = [
+    'elapsedMs', 'rttMs', 'bandwidthBps',
+    'rxData', 'rxBytes', 'rxLoss', 'rxRetransmit', 'rxDropped', 'rxBelated',
+    'rxBuffered', 'rxAck', 'rxNak',
+    'txData', 'txBytes', 'txRetransmit', 'txLoss', 'txBuffered',
+];
 
 function hexToBytes(hex: string): Uint8Array {
     const clean = hex.replace(/[:\s]/g, '');
@@ -89,6 +101,7 @@ export function mountAbHarness(doc: Document = document): void {
     const stopBtn = $('stop');
     const cfg = $('cfg');
     const verdictEl = $('verdict');
+    const finalStatsEl = $('finalstats');
     const table = $('results') as HTMLTableElement;
 
     const params = new URLSearchParams(doc.location.search);
@@ -149,6 +162,7 @@ export function mountAbHarness(doc: Document = document): void {
                 st.final = msg.final;
                 st.state = msg.final.error ? `final (error: ${msg.final.error})` : `final (${msg.final.reason})`;
                 renderFinal(engine, msg.final);
+                renderFinalStats();
                 break;
         }
         cell(engine, 'state').textContent = st.state === 'live' ? `${st.state} — ${st.live}` : st.state;
@@ -164,6 +178,20 @@ export function mountAbHarness(doc: Document = document): void {
         cell(engine, 'loss').textContent = `${f.lossTotal} / ${f.dropTotal}`;
         cell(engine, 'rtt').textContent = `${fmtMs(f.rttMinMs)} / ${fmtMs(f.rttMedianMs)} / ${fmtMs(f.rttMaxMs)}`;
         cell(engine, 'rxbytes').textContent = fmtBytes(f.rxBytesFinal);
+    }
+
+    /** One monospace line per engine: the final full getStats(), raw values. */
+    function renderFinalStats(): void {
+        const lines: string[] = [];
+        for (const engine of ['rust', 'cpp'] as Engine[]) {
+            const fs = engines.get(engine)?.final?.finalStats;
+            if (fs === undefined) continue; // engine has not finished yet
+            const body = fs
+                ? FINAL_STATS_KEYS.map((k) => `${k}=${fs[k]}`).join(' ')
+                : '(no stats sample)';
+            lines.push(`${engine} final stats: ${body}`);
+        }
+        finalStatsEl.textContent = lines.join('\n');
     }
 
     function maybeVerdict(): void {
@@ -183,6 +211,7 @@ export function mountAbHarness(doc: Document = document): void {
         verdictEl.textContent = 'running…';
         for (const st of engines.values()) st.worker.terminate(); // previous round
         engines.clear();
+        finalStatsEl.textContent = '';
         for (const engine of ['rust', 'cpp'] as Engine[]) {
             for (const cls of ['dur', 'msgs', 'bytes', 'hash', 'loss', 'rtt', 'rxbytes']) {
                 cell(engine, cls).textContent = '';
