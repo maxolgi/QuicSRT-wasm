@@ -10,14 +10,14 @@
     <style>
         body { font: 14px monospace; margin: 1em; background: #111; color: #ddd; }
         canvas { width: 100%; max-width: 960px; background: #000; display: block; cursor: pointer; }
-        .note { color: #777; }
         #stats { position: fixed; top: 1em; right: 1em; white-space: pre-line; }
     </style>
 </head>
 <body>
     <canvas id="video"></canvas>
-    <div id="stats">rtt - | bw - | elapsed - ; rx: - ; tx: -</div>
-    <div class="note">tx = the socket's own protocol traffic (ACK/NAK/handshake), not stream media</div>
+    <div id="stats">rtt - bw - elapsed -
+rx: -
+tx: -</div>
     <script src="/cert-hash.js"></script>
     <script type="module" src="/bundle/app.js"></script>
 </body>
