@@ -10,44 +10,13 @@
     <style>
         body { font: 14px monospace; margin: 1em; background: #111; color: #ddd; }
         canvas { width: 100%; max-width: 960px; background: #000; display: block; cursor: pointer; }
-        /* fixed right-side overlay: one line per stat field, covers the
-           player without changing its layout; only the decode button
-           inside takes pointer events */
-        #stats-panel {
-            position: fixed;
-            top: 0;
-            right: 0;
-            padding: .5em .75em;
-            background: rgba(17, 17, 17, .8);
-            pointer-events: none;
-        }
-        #stats-panel button { pointer-events: auto; }
-        #stats { white-space: pre; }
-        .note { color: #777; max-width: 24em; }
+        .note { color: #777; }
     </style>
 </head>
 <body>
     <canvas id="video"></canvas>
-    <aside id="stats-panel">
-        <div id="stats">rtt -
-bw -
-elapsed -
-rxData -
-rxBytes -
-rxLoss -
-rxRetransmit -
-rxDropped -
-rxAck -
-rxNak -
-rxBuffered -
-rxBelated -
-txData -
-txBytes -
-txLoss -
-txRetransmit -
-txBuffered -</div>
-        <div class="note">tx = the socket's own protocol traffic (ACK/NAK/handshake), not stream media</div>
-    </aside>
+    <div id="stats">rtt - | bw - | elapsed - ; rx: - ; tx: -</div>
+    <div class="note">tx = the socket's own protocol traffic (ACK/NAK/handshake), not stream media</div>
     <script src="/cert-hash.js"></script>
     <script type="module" src="/bundle/app.js"></script>
 </body>
