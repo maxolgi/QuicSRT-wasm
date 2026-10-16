@@ -4,3 +4,6 @@ dist/
 *.wasm
 *.js.map
 cert-hash.js
+# player page build artifacts (esbuild output + WebSRT wasm reference)
+page/bundle/
+page/wasm

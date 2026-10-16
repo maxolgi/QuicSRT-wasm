@@ -13,6 +13,8 @@ Commands:
     replay   Build the M2 receiver replay gate test (build/replay.js)
     engine   Build the M3 JS engine wrapper module (build/srt_engine.mjs,
              driven through js/srt_engine.js; gate: node js/test_contract.mjs)
+    page     Bundle the M3 player page (page/bundle/{app,worker}.js) with the
+             WebSRT checkout's esbuild; needs ./build.sh engine first
 EOF
 }
 
@@ -72,6 +74,26 @@ case "${1:-}" in
             -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU32,HEAPF64 \
             -DSRT_ENABLE_VIRTUAL_TRANSPORT \
             -Iharness -Ideps/srt/srtcore -Ideps/srt/common -Ibuild/srt
+        ;;
+    page)
+        # esbuild from the WebSRT checkout (no npm install here). The worker
+        # bundle keeps ../build/srt_engine.mjs EXTERNAL: the emcc module must
+        # be served as its own file because it spawns its pthread workers by
+        # self-importing srt_engine.mjs (and fetches the .wasm relative to
+        # itself) - serve.mjs maps /build/ to this repo's build/.
+        [ -f build/srt_engine.mjs ] || { echo "build/srt_engine.mjs missing - run ./build.sh engine first" >&2; exit 1; }
+        ESBUILD="$HOME/maxolgi/WebSRT/web/node_modules/.bin/esbuild"
+        [ -x "$ESBUILD" ] || { echo "esbuild not found at $ESBUILD" >&2; exit 1; }
+        # demux.ts's ../wasm/mpeg2ts-wasm (the built wasm pkgs, read-only
+        # reference to the WebSRT checkout - same layout depth as web/src)
+        ln -sfn "$HOME/maxolgi/WebSRT/web/wasm" page/wasm
+        mkdir -p page/bundle
+        "$ESBUILD" page/vendor/worker.ts --bundle --format=esm \
+            --external:../build/srt_engine.mjs --outfile=page/bundle/worker.js
+        "$ESBUILD" page/main.ts --bundle --format=esm --outfile=page/bundle/app.js
+        # wasm-bindgen glue resolves its wasm via new URL(..., import.meta.url)
+        # -> the bundle's own directory
+        cp "$HOME/maxolgi/WebSRT/web/wasm/mpeg2ts-wasm/mpeg2ts_wasm_bg.wasm" page/bundle/
         ;;
     -h | --help | help)
         usage
