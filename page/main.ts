@@ -43,12 +43,12 @@ handle.addEventListener('stats', (e) => {
         txData: number; txBytes: number; txRetransmit: number; txLoss: number; txBuffered: number;
     } }>).detail.stats;
     stats.textContent =
-        `rtt ${s.rttMs.toFixed(1)}ms | bw ${(s.bandwidthBps / 1e6).toFixed(1)}Mbps | elapsed ${(s.elapsedMs / 1000).toFixed(1)}s`
-        + ` ; rx: ${s.rxData} msg ${(s.rxBytes / 1e6).toFixed(1)}MB`
-        + ` loss ${s.rxLoss} retrans ${s.rxRetransmit} drop ${s.rxDropped}`
-        + ` ack ${s.rxAck} nak ${s.rxNak} buffered ${s.rxBuffered} belated ${s.rxBelated}`
-        + ` ; tx: ${s.txData} msg ${(s.txBytes / 1e6).toFixed(1)}MB`
-        + ` loss ${s.txLoss} retrans ${s.txRetransmit} buffered ${s.txBuffered}`;
+        `rtt ${s.rttMs.toFixed(1)}ms bw ${(s.bandwidthBps / 1e6).toFixed(1)}Mbps elapsed ${(s.elapsedMs / 1000).toFixed(1)}s\n`
+        + `rx: ${s.rxData} msg ${(s.rxBytes / 1e6).toFixed(1)}MB\n`
+        + `loss ${s.rxLoss} retrans ${s.rxRetransmit} drop ${s.rxDropped}\n`
+        + `ack ${s.rxAck} nak ${s.rxNak} buffered ${s.rxBuffered} belated ${s.rxBelated}\n`
+        + `tx: ${s.txData} msg ${(s.txBytes / 1e6).toFixed(1)}MB\n`
+        + `loss ${s.txLoss} retrans ${s.txRetransmit} buffered ${s.txBuffered}`;
 });
 canvas.addEventListener('click', () => handle.setMuted(!handle.muted));
 
