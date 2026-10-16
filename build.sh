@@ -9,6 +9,7 @@ Commands:
     setup    One-time: init deps/srt (falls back to the local fork clone for
              unpushed pins)
     lib      Configure + build the srt static lib with Emscripten
+    harness  Build the M1 loopback gate test (build/loopback.js)
 EOF
 }
 
@@ -38,6 +39,13 @@ case "${1:-}" in
             -DCMAKE_C_FLAGS=-pthread \
             -DCMAKE_CXX_FLAGS=-pthread
         cmake --build build/srt -j "$(nproc)" --target srt_static
+        ;;
+    harness)
+        source ~/emsdk/emsdk_env.sh
+        em++ harness/loopback.cpp build/srt/libsrt.a -o build/loopback.js \
+            -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -Os \
+            -DSRT_ENABLE_VIRTUAL_TRANSPORT \
+            -Ideps/srt/srtcore -Ideps/srt/common -Ibuild/srt
         ;;
     -h | --help | help)
         usage
