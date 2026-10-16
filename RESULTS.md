@@ -51,7 +51,7 @@ calls it); stats are plain numbers, actions plain objects.
   OperationError; the reference player hits the same wall). The vendored hw/sw toggle
   (`?decode=software`, localStorage `websrt-hw-mode`) fixes it: live 1920x1080 slopshady
   stream renders through the C++ engine (54k msgs / 64 MB, rtt 5.4 ms, canvas pixels
-  changing). The page server runs under supervisord (`srt-wasm-cpp-page`, :8099).
+  changing). The page server runs under supervisord (`websrt-wasm-cpp-page`, :8099).
 - ~30 stderr lines/run of fork `CRcvBuffer.readMessage()` warnings in node tests (pre-existing
   fork race, benign, both engines' harness unaffected).
 - CPU/memory of pthread stacks not measured this spike; note `-fexceptions` is required at
