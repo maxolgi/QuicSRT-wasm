@@ -22,3 +22,48 @@ WebSRT/web/wasm (the built demuxer wasm pkgs - read-only reference).
 Known deltas: worker.ts line 1 swaps the Rust glue import for
 `../../js/srt_engine.js` (engine API deltas documented in `js/srt_engine.js`);
 `page/wasm` is a symlink, not vendored sources.
+
+## M4 A/B harness (`/ab.html`)
+
+Runs the Rust engine (WebSRT `srt-wasm`, via the vendored wasm-bindgen glue
+`page/wasm/srt-wasm/`) and the C++ engine (`js/srt_engine.js` →
+`build/srt_engine.mjs`) side by side on the SAME live stream. Each engine
+gets its own dedicated module worker (`page/bundle/ab_worker.js` bundles
+BOTH glues; the start command picks one) and its own WebTransport
+subscriber session - one session cannot serve two subscribers, their SRT
+handshakes/ACKs would collide. The worker loop is the vendored
+`worker.ts` mechanics (connect/cert-hash pin, datagram pump, adaptive
+4-5 ms tick) with the demux/decode replaced by accounting: every
+DeliverMessage payload feeds a streaming SHA-256 (full run + per
+wall-second buckets keyed off the shared START epoch) and message/byte
+counters; 1 Hz `getStats()` samples go to the main thread.
+
+What the verdict means: the two sessions join the stream at independent
+content offsets, so full-run hashes match only when both engines happened
+to join at the same offset - on a clean loopback expect `hashes differ`
+with a small msgs/bytes delta. The byte-level gate is `aligned buckets`:
+per-second payload digests compared over seconds that are interior for
+BOTH engines (each engine's first/last active second excluded - join/leave
+edges differ by construction). On zero-loss loopback the aligned interior
+buckets should match. Expected noise if a boundary packet releases across
+a second edge in one engine only: a single mismatched bucket with a tiny
+msgs delta.
+
+Runbook:
+
+    ./build.sh engine && ./build.sh page && node page/serve.mjs   # :8099
+    # terminal 2 - publish a stream (SRT ingest 9102, streamid = stream name):
+    ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -c:v libx264 -preset veryfast -b:v 1M -f mpegts "srt://127.0.0.1:9102?streamid=ab&mode=caller&latency=120"
+    # browser: http://localhost:8099/ab.html?stream=ab&latency=120
+    #   START -> both engines subscribe concurrently
+    #   wait >= 30 s (watch the live rtt/delivered line per engine)
+    #   STOP  -> results table + COMPARE verdict
+
+Static gate (no browser): `node page/ab_smoke.mjs` - imports both bundles
+in node, self-tests the streaming SHA-256 against crypto.subtle, drives the
+ab worker end-to-end against the C++ engine over a fake WebTransport
+(js/test_contract.mjs's in-wasm publisher; verifies 2000 messages delivered
+byte-identical with the exact full-run digest), and checks the verdict
+computation. `page/build` (symlink -> ../build) exists so node resolves the
+bundles' external `../build/srt_engine.mjs` the way serve.mjs maps `/build/`
+for the browser.
