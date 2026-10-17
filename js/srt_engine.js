@@ -55,7 +55,9 @@
 //
 // Test-only additions for js/test_contract.mjs (NOT part of the mirrored
 // surface): startTestPublisher(), testPublisherPoll(), testPublisherInject()
-// - the in-wasm synthetic publisher of js/engine_shim.c.
+// - the in-wasm synthetic publisher of js/engine_shim.c - and the exported
+// decodeI64Words(), so the contract test can pin the int64 pair decode's
+// sign extension (the live loopback's estimate is always positive).
 
 let modulePromise = null;
 let M = null; // the resolved emcc module instance
@@ -75,8 +77,11 @@ export default function init() {
 }
 
 // SrtwStats (harness/stats_map.h) layout: 17 eight-byte fields in
-// declaration order - doubles read as f64, int64 counters read as unsigned
-// 32-bit pairs (JS Numbers, never BigInt, like lib.rs's f64 getters).
+// declaration order - doubles read as f64, int64 counters read as
+// two's-complement sign-extended 32-bit pairs (JS Numbers, never BigInt;
+// the sign must survive like the Rust engine's value: srt's -1
+// "no estimate" mbpsBandwidth surfaces as bandwidthBps -1000000, not
+// 2^64 - 1000000).
 const STATS_SIZE = 17 * 8;
 const STATS_KEYS = [
     'elapsedMs', 'rttMs', 'bandwidthBps',
@@ -91,6 +96,16 @@ const STATS_I64 = {
     rxBuffered: 10 * 8, rxBelated: 11 * 8, txData: 12 * 8, txBytes: 13 * 8,
     txRetransmit: 14 * 8, txLoss: 15 * 8, txBuffered: 16 * 8,
 };
+
+// Decode one int64 stats field from its two little-endian u32 words,
+// sign-extending the high word's top bit (two's complement). The
+// subtract-from-lo form (not unsigned sum - 2^64) keeps small negatives
+// exact: the unsigned sum rounds at 2^64, where a double's ulp is 2048.
+export function decodeI64Words(lo, hi) {
+    return hi >= 0x80000000
+        ? lo - (4294967296 - hi) * 4294967296
+        : lo + hi * 4294967296;
+}
 
 // action scratch: payload cap 1128 + any SRT message envelope headroom
 const BUF_CAP = 2048;
@@ -220,7 +235,7 @@ export class SrtReceiver {
             }
             for (const k in STATS_I64) {
                 const o = (this._stats + STATS_I64[k]) / 4;
-                s[k] = u32[o] + u32[o + 1] * 4294967296;
+                s[k] = decodeI64Words(u32[o], u32[o + 1]);
             }
         }
         return s;

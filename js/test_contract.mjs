@@ -15,7 +15,7 @@
 // with sane values (rxData == 2000, seeded RTT refined below 300 ms).
 // Exit 0 = pass. srt's pthreads keep node alive, hence the explicit exits.
 
-import init, { SrtReceiver } from './srt_engine.js';
+import init, { SrtReceiver, decodeI64Words } from './srt_engine.js';
 
 const PAYLOAD_SIZE = 1128;
 const NUM_MESSAGES = 2000;
@@ -182,12 +182,20 @@ const INT64_KEYS = [
 for (const k of INT64_KEYS) {
     if (!Number.isInteger(s[k])) fail(`getStats().${k} = ${s[k]}, expected an integer`);
 }
+// The negative int64 case the live loopback session never produces (its
+// estimate seeds positive): srt's -1 "no estimate" mbpsBandwidth maps to
+// bandwidth_bps -1000000 (0xFFFFFFFFFFF0BDC0 -> u32 pair 0xFFF0BDC0 /
+// 0xFFFFFFFF), which must decode sign-extended to the Rust engine's
+// -1000000, not the raw unsigned pair ~1.8e19.
+if (decodeI64Words(0xFFF0BDC0, 0xFFFFFFFF) !== -1000000) {
+    fail(`int64 pair decode of -1000000 gave ${decodeI64Words(0xFFF0BDC0, 0xFFFFFFFF)}, not sign-extended`);
+}
 if (s.rxData !== NUM_MESSAGES) fail(`rxData = ${s.rxData}, expected ${NUM_MESSAGES}`);
 if (!(s.rttMs > 0 && s.rttMs < SEED_RTT_MS)) fail(`rttMs = ${s.rttMs}, expected refined 0 < rtt < ${SEED_RTT_MS}`);
 if (s.rxLoss !== 0) fail(`rxLoss = ${s.rxLoss}, expected 0`);
 if (s.rxDropped !== 0) fail(`rxDropped = ${s.rxDropped}, expected 0`);
 if (s.txData !== 0 || s.txBytes !== 0) fail('receive-only session reported tx traffic');
-pass(`stats (17 StatsMsg keys, rxData=${s.rxData}, rttMs=${s.rttMs.toFixed(1)} < ${SEED_RTT_MS}, rxLoss=0, rxDropped=0)`);
+pass(`stats (17 StatsMsg keys, rxData=${s.rxData}, rttMs=${s.rttMs.toFixed(1)} < ${SEED_RTT_MS}, rxLoss=0, rxDropped=0, int64 decode sign-extends -1000000)`);
 
 rx.free();
 pass('free (engine + test publisher teardown)');
