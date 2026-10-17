@@ -7,6 +7,10 @@ one engine-swap line in `worker.ts`); `page/wasm` is a symlink to
 WebSRT/web/wasm (the built demuxer wasm pkgs - read-only reference).
 
 - Serve: `./build.sh engine && ./build.sh page && node page/serve.mjs`
+- Rust-gateway cross-check (M6): second instance on another port, pinning
+  the Rust gateway's boot-time hash file (it has no web port) instead of
+  the C++ proxy: `PORT=8098 WEBSRT_CERT_HASH_FILE=/home/flibb/maxolgi/WebSRT/web/public/cert-hash.js node page/serve.mjs`
+  (also `WEBSRT_CERT_HASH_PROXY=<url>` to proxy another loopback gateway)
 - Open: `http://localhost:8099/?stream=test` (localhost is a secure context;
   COOP/COEP headers come from serve.mjs - the emcc engine needs pthreads)
 - Gateway: the local `websrt-cpp` supervisord service (WT udp 4435, web
