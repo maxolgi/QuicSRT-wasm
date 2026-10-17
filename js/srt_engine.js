@@ -78,14 +78,15 @@
 // never sees it). The drain cycle polls the same counter and console.warns
 // at most once per DROP_WARN_MS while it grows.
 
+import { loadEngineModule } from './engine_module.js';
+
 let modulePromise = null;
 let M = null; // the resolved emcc module instance
 
 export default function init() {
     if (!modulePromise) {
         modulePromise = (async () => {
-            const mod = await import('../build/srt_engine.mjs');
-            M = await mod.default();
+            M = await loadEngineModule();
             if (M._srtw_init() !== 0) {
                 throw new Error('srt_engine: srtw_init failed');
             }
