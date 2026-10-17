@@ -145,6 +145,10 @@ Steps (each its own commit, gate before moving on):
    feed→onPes latency percentiles + GC/long-task count via
    PerformanceObserver → verify: written into the commit message or
    `page/README.md`; no regression, ideally a visible tail improvement.
+   — ✅ DONE: b41cf49 (table in page/README.md: no regression on any
+   metric; the hoped-for tail win stays unmeasured at 0.9 Mbps loopback
+   load — the M5 stretch goal keeps its "measured justification"
+   bar).
 
 Stretch (only if step 7 says we need more): feed the demuxer directly from
 the engine ring inside C++ (no JS hop for message bytes at all) — bigger
@@ -184,11 +188,22 @@ push_pcm_pid poll`.
    frames with keyframe flags, pts/dts sequences, PCM blocks) through Rust
    and C++ muxers → verify: **byte-identical** `poll()` output (PAT/PMT/PCR
    timing included).
+   — ✅ DONE: 2435dde (harness + corpus, Rust-vs-Rust self-test green),
+   0927eed (harness/ts_muxer.cpp behind js/muxer_engine.js on the shared
+   engine module; 22 scenarios, 1,103,560 B in 5,870 TS packets compared
+   byte-identical, zero exclusions).
 2. Swap `stream-worker.ts` muxer import → verify: live publish E2E again
    (both gateways), player playback.
+   — ✅ DONE: 3fd4e55 (one-line import swap to js/muxer_engine.js, the
+   e53f926 pattern; live E2E on websrt-cpp — 47.6 s zero-loss playback —
+   and on the Rust websrt gateway; publisher bundle carries zero Rust
+   wasm refs).
 3. Cutover + docs: runtime now imports zero Rust pkgs; `page/wasm` symlink
    kept and documented as oracle/AB-only; update `README.md` and
    `page/README.md` (Known deltas section), retire this PLAN.md.
+   — ✅ DONE: 3fd4e55 (page/README.md Known deltas + publisher section:
+   player + publisher runtime import zero Rust pkgs, page/wasm =
+   oracle/AB-only). Retirement follows in its own commit.
 
 ## Out of scope
 
