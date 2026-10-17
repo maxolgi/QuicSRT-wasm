@@ -76,6 +76,9 @@ export interface AbFinal {
     rttMaxMs: number | null;
     lossTotal: number;
     dropTotal: number;
+    /** Cumulative outgoing-ring drops inside the C++ shim (a stalled drain);
+     *  null for the rust engine, which has no ring. */
+    outDropped: number | null;
     rxBytesFinal: number;
     /** Final full getStats() snapshot: all 17 STATS_KEYS, raw values. */
     finalStats: Record<string, number> | null;
@@ -528,8 +531,14 @@ function finish(reason: string, error?: string) {
     const r = rx;
     rx = null;
     let s = lastStats;
+    let outDropped: number | null = null;
     if (r) {
         try { s = statsPOJO(r); } catch { /* keep last sample */ }
+        // cpp-engine diagnostic (js/srt_engine.js); the rust engine has no
+        // outgoing ring, hence null
+        if (typeof r.getDroppedOutgoing === 'function') {
+            try { outDropped = r.getDroppedOutgoing(); } catch { /* keep null */ }
+        }
         try { r.free(); } catch { /* idempotent */ }
     }
     if (w) { try { w.close({}); } catch {} }
@@ -555,6 +564,7 @@ function finish(reason: string, error?: string) {
         rttMaxMs: sortedRtt.length > 0 ? sortedRtt[sortedRtt.length - 1] : null,
         lossTotal: s ? s.rxLoss : 0,
         dropTotal: s ? s.rxDropped : 0,
+        outDropped,
         rxBytesFinal: s ? s.rxBytes : 0,
         finalStats: s,
     };

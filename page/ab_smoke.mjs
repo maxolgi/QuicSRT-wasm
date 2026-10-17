@@ -11,7 +11,8 @@
 //    kind-0 writes back into the publisher, stop after 2000 messages, and
 //    verify the final report - totals, the full-run SHA-256 against node's
 //    crypto over the known deterministic stream, bucket sums, handshake
-//    event, stats samples, zero loss/drop.
+//    event, stats samples, zero loss/drop (rx stats and the shim's
+//    outgoing ring alike).
 //
 // Exit 0 = pass. srt's pthreads keep node alive, hence the explicit exit.
 
@@ -189,9 +190,10 @@ pass(`final stats snapshot (all 17 raw fields, rxData=${finalMsg.finalStats.rxDa
 
 if (finalMsg.lossTotal !== 0) fail(`rxLoss = ${finalMsg.lossTotal}, expected 0`);
 if (finalMsg.dropTotal !== 0) fail(`rxDropped = ${finalMsg.dropTotal}, expected 0`);
+if (finalMsg.outDropped !== 0) fail(`outDropped = ${finalMsg.outDropped}, expected 0 on a clean run`);
 if (finalMsg.rxBytesFinal < finalMsg.bytes) fail(`rxBytes ${finalMsg.rxBytesFinal} < delivered ${finalMsg.bytes}`);
 if (finalMsg.rttMedianMs === null) fail('no rtt samples');
-pass(`stats totals (loss 0, drop 0, rtt med ${finalMsg.rttMedianMs.toFixed(2)} ms, rxBytes ${finalMsg.rxBytesFinal})`);
+pass(`stats totals (loss 0, drop 0, outDropped 0, rtt med ${finalMsg.rttMedianMs.toFixed(2)} ms, rxBytes ${finalMsg.rxBytesFinal})`);
 
 // ---- 4. compareVerdict over synthetic finals (pure function) ---------------
 

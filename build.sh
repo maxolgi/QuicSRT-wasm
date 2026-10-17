@@ -94,7 +94,7 @@ case "${1:-}" in
             -o build/srt_engine.mjs \
             -fexceptions -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -Os \
             -sMODULARIZE=1 -sEXPORT_NAME=createSrtEngineModule -sEXPORT_ES6=1 \
-            -sEXPORTED_FUNCTIONS=_srtw_init,_srtw_engine_new,_srtw_engine_receiver,_srtw_handle_datagram,_srtw_poll,_srtw_poll_outgoing,_srtw_get_stats,_srtw_engine_free,_srtw_test_publisher_start,_srtw_test_publisher_inject,_srtw_test_publisher_poll,_malloc,_free \
+            -sEXPORTED_FUNCTIONS=_srtw_init,_srtw_engine_new,_srtw_engine_receiver,_srtw_handle_datagram,_srtw_poll,_srtw_poll_outgoing,_srtw_dropped_outgoing,_srtw_get_stats,_srtw_engine_free,_srtw_test_publisher_start,_srtw_test_publisher_inject,_srtw_test_publisher_poll,_malloc,_free \
             -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU32,HEAPF64 \
             -DSRT_ENABLE_VIRTUAL_TRANSPORT \
             -Iharness $LW_INC $SRT_INC

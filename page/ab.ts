@@ -13,7 +13,10 @@
 //     second is excluded: session join/leave edges differ by construction).
 //   - "final stats" lines: each engine's FINAL full getStats() snapshot
 //     (all 17 fields, raw values, fixed key order) so every bw/ack/nak/
-//     buffered/belated/tx* field can be diffed Rust-vs-C++ directly.
+//     buffered/belated/tx* field can be diffed Rust-vs-C++ directly, plus
+//     a trailing outDropped token: the C++ shim's outgoing-ring drop count
+//     (n/a for Rust, which has no ring) - handshake/ACK datagrams dropped
+//     by a stalled drain are invisible in getStats.
 //
 // Two live sessions receive independent copies of the stream, so full-run
 // hashes match only when both engines joined at the same content offset -
@@ -180,16 +183,18 @@ export function mountAbHarness(doc: Document = document): void {
         cell(engine, 'rxbytes').textContent = fmtBytes(f.rxBytesFinal);
     }
 
-    /** One monospace line per engine: the final full getStats(), raw values. */
+    /** One monospace line per engine: the final full getStats(), raw values,
+     *  plus the shim's outgoing-ring drop count (outDropped, cpp only). */
     function renderFinalStats(): void {
         const lines: string[] = [];
         for (const engine of ['rust', 'cpp'] as Engine[]) {
-            const fs = engines.get(engine)?.final?.finalStats;
-            if (fs === undefined) continue; // engine has not finished yet
+            const f = engines.get(engine)?.final;
+            if (!f) continue; // engine has not finished yet
+            const fs = f.finalStats;
             const body = fs
                 ? FINAL_STATS_KEYS.map((k) => `${k}=${fs[k]}`).join(' ')
                 : '(no stats sample)';
-            lines.push(`${engine} final stats: ${body}`);
+            lines.push(`${engine} final stats: ${body} outDropped=${f.outDropped === null ? 'n/a' : f.outDropped}`);
         }
         finalStatsEl.textContent = lines.join('\n');
     }

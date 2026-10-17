@@ -10,10 +10,11 @@
 //
 // Gate criteria: the mirrored API surface exists, the handshake completes
 // through the poll cycle, the outgoing ring delivered the receiver's
-// handshake/ACK datagrams, all 2000 messages arrive byte-identical in
-// order, and getStats() has exactly the 17 StatsMsg keys worker.ts reads
-// with sane values (rxData == 2000, seeded RTT refined below 300 ms).
-// Exit 0 = pass. srt's pthreads keep node alive, hence the explicit exits.
+// handshake/ACK datagrams and dropped none, all 2000 messages arrive
+// byte-identical in order, and getStats() has exactly the 17 StatsMsg keys
+// worker.ts reads with sane values (rxData == 2000, seeded RTT refined
+// below 300 ms). Exit 0 = pass. srt's pthreads keep node alive, hence the
+// explicit exits.
 
 import init, { SrtReceiver, decodeI64Words } from './srt_engine.js';
 
@@ -65,6 +66,8 @@ if (typeof SrtReceiver.newWithLatencyAndRtt !== 'function') fail('SrtReceiver.ne
 for (const m of ['handle_datagram', 'poll', 'isHandshakeComplete', 'isClosed', 'getStats', 'free']) {
     if (typeof SrtReceiver.prototype[m] !== 'function') fail(`SrtReceiver.prototype.${m} is not a function`);
 }
+// diagnostic addition (documented in srt_engine.js, not the mirrored surface)
+if (typeof SrtReceiver.prototype.getDroppedOutgoing !== 'function') fail('SrtReceiver.prototype.getDroppedOutgoing is not a function');
 pass('init (module load + mirrored SrtReceiver surface)');
 
 // The plain-constructor + free path (wasm-bindgen's `new SrtReceiver()`).
@@ -75,6 +78,7 @@ pass('init (module load + mirrored SrtReceiver surface)');
         if (s[k] !== 0) fail(`pre-connection getStats().${k} = ${s[k]}, expected 0`);
     }
     if (probe.isHandshakeComplete() || probe.isClosed()) fail('fresh receiver must be neither connected nor closed');
+    if (probe.getDroppedOutgoing() !== 0) fail(`fresh receiver getDroppedOutgoing() = ${probe.getDroppedOutgoing()}, expected 0`);
     probe.free();
     probe.free(); // idempotent
     if (probe.poll(nowUs()).length !== 0) fail('poll() after free() must return []');
@@ -145,11 +149,12 @@ while (delivered.length < NUM_MESSAGES) {
 if (handshakeActions !== 1) fail(`HandshakeComplete emitted ${handshakeActions} times, expected exactly 1`);
 if (hsAfterFirstDeliver) fail('HandshakeComplete arrived after data (worker.ts expects it at HS time)');
 if (outgoing === 0) fail('outgoing ring delivered no handshake/ACK datagrams');
+if (rx.getDroppedOutgoing() !== 0) fail(`outgoing ring dropped ${rx.getDroppedOutgoing()} datagram(s) on a clean run`);
 if (closeActions !== 0) fail(`unexpected Close action(s): ${closeActions}`);
 if (unknownKinds.size !== 0) fail(`unknown action kinds: ${[...unknownKinds]}`);
 if (!rx.isHandshakeComplete()) fail('isHandshakeComplete() false after delivery');
 if (rx.isClosed()) fail('isClosed() true on a live connection');
-pass(`handshake (kind-2 exactly once, ${outgoing} kind-0 datagrams through the outgoing ring)`);
+pass(`handshake (kind-2 exactly once, ${outgoing} kind-0 datagrams through the outgoing ring, 0 dropped)`);
 
 const expect = new Uint8Array(PAYLOAD_SIZE);
 for (let i = 0; i < NUM_MESSAGES; i++) {

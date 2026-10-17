@@ -16,8 +16,10 @@
 //      mirroring the seam's VT_MAX_PENDING spirit; MTU caps a datagram at
 //      1500 bytes). Overflow drops the OLDEST slot so the newest control
 //      traffic (NAKs, ACKs) survives; a per-ring dropped counter counts the
-//      victims. At player rates the ring holds several seconds of pure
-//      control traffic, so drops indicate a stalled JS loop, not load.
+//      victims, and srtw_dropped_outgoing surfaces the engine ring's count
+//      to JS so a stalled drain is observable, not silent. At player rates
+//      the ring holds several seconds of pure control traffic, so drops
+//      indicate a stalled JS loop, not load.
 //
 //   2. The test publisher (js/test_contract.mjs only, the replay_test.cpp
 //      caller pattern): an in-wasm SRT caller socket whose sends land in a
@@ -208,6 +210,25 @@ int srtw_poll_outgoing(void* h, uint8_t* buf, int cap)
         return -1;
     }
     return ring_pop(&((srtw_engine*)h)->out, buf, cap);
+}
+
+// The engine ring's cumulative overflow count: outgoing datagrams lost to a
+// full ring, i.e. to a JS drain that fell 1024 datagrams behind. double,
+// not the counter's uint64_t, so the emcc JS surface yields a plain Number
+// (a wasm i64 return would surface as a BigInt; a Number is exact through
+// 2^53, far past any real drop count). Monotonic per handle; -1 on a bad
+// handle.
+double srtw_dropped_outgoing(void* h)
+{
+    if (h == NULL || ((srtw_engine*)h)->magic != SRTW_ENGINE_MAGIC)
+    {
+        return -1;
+    }
+    srtw_engine* e = (srtw_engine*)h;
+    pthread_mutex_lock(&e->out.mu);
+    const double dropped = (double)e->out.dropped;
+    pthread_mutex_unlock(&e->out.mu);
+    return dropped;
 }
 
 void srtw_engine_free(void* h)

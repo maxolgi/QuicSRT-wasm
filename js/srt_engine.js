@@ -58,6 +58,13 @@
 // - the in-wasm synthetic publisher of js/engine_shim.c - and the exported
 // decodeI64Words(), so the contract test can pin the int64 pair decode's
 // sign extension (the live loopback's estimate is always positive).
+//
+// Diagnostic addition (also NOT part of the mirrored surface):
+// getDroppedOutgoing() - the shim ring's cumulative count of outgoing
+// datagrams dropped on overflow, i.e. lost to a JS drain that fell behind
+// (the Rust engine has no ring and cannot drop this way, so worker.ts
+// never sees it). The drain cycle polls the same counter and console.warns
+// at most once per DROP_WARN_MS while it grows.
 
 let modulePromise = null;
 let M = null; // the resolved emcc module instance
@@ -110,6 +117,10 @@ export function decodeI64Words(lo, hi) {
 // action scratch: payload cap 1128 + any SRT message envelope headroom
 const BUF_CAP = 2048;
 
+// ring-drop warning rate limit: one console.warn per window however long
+// the drain stays stalled
+const DROP_WARN_MS = 5000;
+
 function makeAction(kind, data = null, text = '', waitMs = 0, schedUs = 0) {
     const a = { kind, data, text, wait_ms: waitMs, schedUs };
     a.takeData = () => {
@@ -139,6 +150,8 @@ export class SrtReceiver {
         this._hs = false;
         this._closed = false;
         this._freed = false;
+        this._dropped = 0; // last-seen outgoing-ring drop count
+        this._droppedWarnAt = 0; // Date.now() of the last drop warning
     }
 
     static newWithLatency(latencyMs) {
@@ -241,6 +254,17 @@ export class SrtReceiver {
         return s;
     }
 
+    // Diagnostic (NOT part of the mirrored surface; see file header): the
+    // shim ring's cumulative count of outgoing datagrams dropped on
+    // overflow - handshake replies/ACKs/NAKs the JS drain never collected.
+    // 0 on a healthy run.
+    getDroppedOutgoing() {
+        if (this._freed) {
+            return this._dropped;
+        }
+        return M._srtw_dropped_outgoing(this._eng);
+    }
+
     free() {
         if (this._freed) {
             return;
@@ -271,6 +295,22 @@ export class SrtReceiver {
                 break;
             }
             out.push(makeAction(0, new Uint8Array(M.HEAPU8.subarray(this._outBuf, this._outBuf + n))));
+        }
+        this._checkDropped();
+    }
+
+    // Watch the ring's cumulative drop count across drain cycles; a growing
+    // count means outgoing datagrams were lost to a full ring between
+    // cycles. Rate-limited because a hard stall drops continuously.
+    _checkDropped() {
+        const dropped = M._srtw_dropped_outgoing(this._eng);
+        if (dropped > this._dropped) {
+            const now = Date.now();
+            if (now - this._droppedWarnAt >= DROP_WARN_MS) {
+                console.warn(`srt_engine: outgoing ring dropped ${dropped} datagram(s) - drain loop stalled?`);
+                this._droppedWarnAt = now;
+            }
+            this._dropped = dropped;
         }
     }
 
