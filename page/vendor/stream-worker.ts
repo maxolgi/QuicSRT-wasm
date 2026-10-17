@@ -4,9 +4,7 @@
 //
 //   1. [engine-swap] import (original line 1):
 //      '../wasm/srt-wasm/srt_wasm.js' -> '../../js/srt_engine.js' (the
-//      same swap as page/vendor/worker.ts). The muxer import on the next
-//      line is untouched: the muxer stays Rust until M7 - one variable
-//      at a time.
+//      same swap as page/vendor/worker.ts).
 //   2. [documented-divergence] flushTsToSrt(): the Rust engine's
 //      rx.sendMessage(tsBytes, nowUs) returned SrtAction[] that were
 //      processed inline; the C++ engine's sendMessage(bytes[, timeoutMs])
@@ -27,8 +25,14 @@
 //        - No return actions to process: the fragmented SRT packets ride
 //          the engine's outgoing ring and surface as kind-0 actions on
 //          the next handle_datagram/poll drain in runSrtLoop().
+//   3. [muxer-swap] import (original line 2):
+//      '../wasm/ts-muxer-wasm/ts_muxer_wasm.js' -> '../../js/muxer_engine.js'
+//      (the M7 C++ muxer behind the same surface - the same one-line
+//      pattern as page/vendor/demux.ts; deltas documented in
+//      js/muxer_engine.js). initMux() is unchanged: it just awaits the
+//      shared engine-module loader now.
 import initSrt, { SrtReceiver, type SrtAction, type SrtStats } from '../../js/srt_engine.js';
-import initMux, { TsMuxer } from '../wasm/ts-muxer-wasm/ts_muxer_wasm.js';
+import initMux, { TsMuxer } from '../../js/muxer_engine.js';
 import type { StatsMsg } from './worker';
 
 export type { StatsMsg };

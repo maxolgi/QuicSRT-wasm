@@ -136,8 +136,8 @@ case "${1:-}" in
             --external:../build/srt_engine.mjs --outfile=page/bundle/ab_worker.js
         "$ESBUILD" page/ab.ts --bundle --format=esm --outfile=page/bundle/ab.js
         # M6 publisher page: the worker bundles the vendored stream-worker.ts
-        # (C++ engine + the Rust ts-muxer until M7 - hence its bg wasm copy
-        # below); same --external treatment for the emcc module.
+        # (C++ engine + C++ muxer since M7 - no Rust wasm copy needed); same
+        # --external treatment for the emcc module.
         "$ESBUILD" page/vendor/stream-worker.ts --bundle --format=esm \
             --external:../build/srt_engine.mjs --outfile=page/bundle/publish_worker.js
         "$ESBUILD" page/publish.ts --bundle --format=esm --outfile=page/bundle/publish.js
@@ -145,7 +145,6 @@ case "${1:-}" in
         # -> the bundle's own directory
         cp "$HOME/maxolgi/WebSRT/web/wasm/mpeg2ts-wasm/mpeg2ts_wasm_bg.wasm" page/bundle/
         cp "$HOME/maxolgi/WebSRT/web/wasm/srt-wasm/srt_wasm_bg.wasm" page/bundle/
-        cp "$HOME/maxolgi/WebSRT/web/wasm/ts-muxer-wasm/ts_muxer_wasm_bg.wasm" page/bundle/
         ;;
     -h | --help | help)
         usage

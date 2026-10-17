@@ -35,9 +35,14 @@ demux.ts line 4 swaps the Rust demux pkg import for `../../js/demux_engine.js`
 `vendor/stream-worker.ts` + `vendor/shared/publish.ts` is vendored @ 854c25c
 as well: stream-worker.ts swaps the engine import the same way and adapts
 `flushTsToSrt()` to the C ABI `sendMessage()` return codes (deltas 1-2
-documented in its header); shared/publish.ts is verbatim. The worker's
-muxer import stays Rust (`../wasm/ts-muxer-wasm`, its bg wasm copied into
-`page/bundle/`) until the M7 C++ muxer lands.
+documented in its header); shared/publish.ts is verbatim. stream-worker.ts
+line 31 swaps the Rust muxer pkg import for `../../js/muxer_engine.js`
+(the M7 C++ muxer behind the same surface; delta 3 in its header, deltas
+in `js/muxer_engine.js`; the `ts_muxer_wasm_bg.wasm` bundle copy went
+with it). With M7 the cutover is complete: the player and publisher
+runtime bundles import ZERO Rust wasm pkgs — `page/wasm` stays dev-time
+only (the parity harnesses and the ab page's Rust engine arm still
+import it through the symlink).
 
 ## M5 perf snapshot (step 7, 2026-10-17)
 
@@ -138,8 +143,9 @@ for the browser.
 
 Publishes webcam video+audio from the browser through the vendored
 publisher worker (`page/bundle/publish_worker.js` bundles
-`vendor/stream-worker.ts`: WebCodecs encode + Rust TS mux in the worker, the
-C++ wasm engine behind `js/srt_engine.js` as the SRT layer). The driving
+`vendor/stream-worker.ts`: WebCodecs encode + TS mux in the worker, both
+on the C++ engine module since M7 — the muxer behind `js/muxer_engine.js`,
+the SRT layer behind `js/srt_engine.js` as before). The driving
 logic mirrors WebSRT's publish UI (`web/src/stream.tsx` @ 854c25c): `init`
 (WT url + certHash + latency + video/audio encoder config, certHash
 transferred) starts a session, `VideoFrame`s flow as transferred `frame`

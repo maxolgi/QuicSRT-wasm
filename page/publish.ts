@@ -1,7 +1,8 @@
 // M6 publisher page main thread: drives the vendored WebSRT publisher worker
 // (page/bundle/publish_worker.js, built from page/vendor/stream-worker.ts -
-// WebCodecs encode + Rust TS mux in the worker, the C++ wasm engine behind
-// js/srt_engine.js as the SRT layer) through its postMessage protocol,
+// WebCodecs encode + the C++ TS mux (js/muxer_engine.js, M7) in the worker,
+// the C++ wasm engine behind js/srt_engine.js as the SRT layer) through its
+// postMessage protocol,
 // mirroring WebSRT's publish UI (web/src/stream.tsx @ 854c25c). Deltas vs
 // that UI are deliberate and listed in page/README.md: webcam-only
 // getUserMedia capture (no screen capture / tab audio / camera picker), a
