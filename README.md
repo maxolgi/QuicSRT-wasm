@@ -1,6 +1,6 @@
 # srt-wasm-cpp
 
-Spike: a C++/WASM port of WebSRT's Rust `srt-wasm` player engine — Haivision
+C++/WASM port of WebSRT's Rust `srt-wasm` player engine — Haivision
 SRT compiled with Emscripten, driven from a web worker, meant to replace the
 Rust engine inside WebSRT's player worker.
 
@@ -13,4 +13,4 @@ Build:
     ./build.sh setup   # init deps/srt (falls back to the local fork for unpushed pins)
     ./build.sh lib     # configure + build the srt static lib with Emscripten
 
-License: MPL-2.0, inherited from the srt fork.
+License: MPL-2.0
