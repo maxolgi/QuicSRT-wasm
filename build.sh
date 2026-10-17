@@ -42,7 +42,7 @@ case "${1:-}" in
         # and check it out (goes dormant once every pin is pushed).
         pinned="$(git ls-tree HEAD deps/libwebsrt | awk '{print $3}')"
         if ! git -C deps/libwebsrt cat-file -e "${pinned}^{commit}" 2>/dev/null; then
-            git -C deps/libwebsrt fetch /home/flibb/maxolgi/WebSRT-cpp/libwebsrt master 2>/dev/null || true
+            git -C deps/libwebsrt fetch "$HOME/maxolgi/WebSRT-cpp/libwebsrt" master 2>/dev/null || true
             if [ "$(git -C deps/libwebsrt rev-parse HEAD)" != "$pinned" ]; then
                 git -C deps/libwebsrt checkout "$pinned"
             fi
