@@ -36,6 +36,35 @@ PES payloads out as heap views.
 Protocol constants that must not drift: SRT payload 1128 (6×188; negotiated
 940 effective), TS packet 188, TSBPD `max(sender, receiver)`.
 
+## Prep notes (research done, no code)
+
+`plan-notes/` holds the execution contracts — read the relevant note before
+starting each milestone:
+
+- `abi-census.md` — the complete port contract: 80 items across TsDemuxer /
+  TsEvent / DebugSnapshot / meter / TsMuxer, all with file:line cites, the
+  COPY/VIEW table, and the APIs no current consumer uses (surface shrink).
+- `parity-spec.md` — the golden set: 10 ffmpeg streams + 9 crafted
+  corruptions, ~3.7 MB checked in, regen-script contract, and the per-field
+  comparison rules. PCM bit-identity is confirmed achievable (aes3 scales
+  are powers of two, no float accumulation). Error-event `text` must be
+  canonicalized by stripping the ` (at <path>:<line>)` suffix, harness runs
+  with RUST_BACKTRACE unset; wall-clock snapshot fields (ringT/errorT/
+  bitratesMbps) are excluded from comparison.
+- `meter-parity.md` — per-field exactness: 8 exact-bit, 2 order-sensitive
+  (C++ must mirror loop order), 2 tolerant (lufs/spectrum, abs 1e-6 dB).
+  The FFT is hand-rolled (meter.rs:488-534) — port it verbatim, no library.
+  `snapshot()` is mutating: the harness must replay an identical
+  update/snapshot/selection interleave, incl. LUFS block-ring history.
+- `debug-consumers.md` — all 49 snapshot fields are consumed (17
+  load-bearing); the 10 retention hazards that forced the data-return
+  policy above (H3 is the scariest).
+- `publisher-surface.md` — M6 contract: `sendMessage` is the ONLY engine
+  API missing from `js/srt_engine.js`; vendoring = 2 files + 1 import
+  swap; WebSRT pin 854c25c confirmed (same as page/vendor). Known deltas
+  to carry, not fix, in the vendored worker: rx-path `free()` is never
+  called (per-session leak), tx stats population unverified until M6.
+
 ## M5 — C++ TS demuxer + metering (player path, brings the debug tools)
 
 Port the demuxer into the SAME emscripten module as the engine (new exports
@@ -50,10 +79,17 @@ on `build/srt_engine.mjs`). ABI mirrors the wasm-bindgen surface exactly so
   match exactly)
 - `meter_snapshot() -> MeterSnapshotView` (pids, channel_counts, peaks, …)
 
-Zero-copy contract (document at the export site): PES/PCM data are returned
-as `HEAPU8`/`Float32Array` **views** valid only until the next `feed()``;
-consumers must not retain them. `worker.ts` already treats feed as
-synchronous with a feed-context, so this fits.
+Data-return policy (corrected by the retention audit in
+`plan-notes/debug-consumers.md`): `TsEvent` data/samples/nal arrays stay
+**copies** in M5, matching wasm-bindgen semantics. The vendored worker
+retains events across `feed()` calls in its `outgoing` queue and
+postMessage-**transfers** `data.buffer`/`samples.buffer`/NAL buffers
+(worker.ts:363-377) — a heap view's buffer is the whole shared wasm
+memory, and transferring it would detach the engine+demux heap mid-stream
+(hazard H3). Heap views remain the documented stretch goal, gated on the
+vendored worker copying at its queue boundary. Snapshots stay copies. The
+single-module win (no second heap, no second JS crossing per message) is
+unaffected by this policy.
 
 **Parity harness first** — `js/demux_parity.mjs`, run in node: imports BOTH
 the Rust pkg (`page/wasm/mpeg2ts-wasm`, via the symlink) and the C++ module
