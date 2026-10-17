@@ -39,6 +39,44 @@ documented in its header); shared/publish.ts is verbatim. The worker's
 muxer import stays Rust (`../wasm/ts-muxer-wasm`, its bg wasm copied into
 `page/bundle/`) until the M7 C++ muxer lands.
 
+## M5 perf snapshot (step 7, 2026-10-17)
+
+Host `deb` (16 cores), Chrome 151, stream `browsertest` (testsrc2 640x360@30
+libx264 + sine AAC, ~0.93 Mbps TS, 0 loss/drop) via the local `websrt-cpp`
+gateway, software WebCodecs decode — `prefer-hardware` configure proved
+flaky in this Chrome for BOTH paths (identical `avc1.64001e` + avcC configs
+rejected in a retry loop), so every run pins `?decode=software`. OLD = this
+page replicated in a scratch rig with the pre-swap Rust demux import
+restored (only the worker bundle differs, same esbuild flags); NEW = the
+committed page as-is. A/B/A/B order, one browser window, fresh page load
+per ~100 s window, canvas pixel-check liveness every 15 s (640x360,
+animating in every run). Instrumented only from outside (injected-on-new-
+document script wrapping `Worker` onmessage + PerformanceObserver longtask;
+rig not committed). The worker-internal per-frame release-jitter metric
+(`videoLatency` in the stats) never populates on either path — the engine's
+deliver actions carry no `schedUs` — so the demux-side signal is the
+main-thread PES cadence plus the worker's own loop stats.
+
+| metric (per run, 2 runs per path) | OLD Rust pkg | NEW C++ module |
+|---|---|---|
+| videoPes inter-arrival p50 (ms) | 34.11 | 34.11–34.13 |
+| videoPes inter-arrival p95 (ms) | 35.17–35.18 | 35.19–35.29 |
+| videoPes inter-arrival p99 (ms) | 35.65–35.81 | 35.66–35.77 |
+| videoPes inter-arrival max (ms) | 39.4–40.3 | 39.4–40.1 |
+| video fps delivered | 30.0 | 30.0 |
+| main-thread longtasks (n / TBT) | 0 / 0 ms | 0 / 0 ms |
+| worker loop iter avg (ms) | 3.16–3.17 | 3.16 |
+| worker worst loop cycle (ms) | 7.4–8.1 | 7.5–7.6 |
+| nav → first videoPes (ms) | 225–279 | 158–293 |
+
+Verdict: **no regression** — every metric matches within run-to-run noise.
+The hoped-for tail improvement is NOT visible at this load (0.9 Mbps,
+640x360, loopback): zero main-thread longtasks on both paths, and demux
+runs in the worker whose heap/GC PerformanceObserver cannot see, so the
+allocation-churn win stays unmeasured rather than disproven — a heavier
+stream would be the honest test (the M5 stretch goal keeps its
+"measured justification required" bar).
+
 ## M4 A/B harness (`/ab.html`)
 
 Runs the Rust engine (WebSRT `srt-wasm`, via the vendored wasm-bindgen glue
