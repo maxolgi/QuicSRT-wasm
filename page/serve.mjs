@@ -36,7 +36,12 @@ http.createServer((req, res) => {
     const file = normalize(join(base, url === '/' ? 'index.html' : url));
     const ok = file === base || file.startsWith(base.endsWith(sep) ? base : base + sep);
     if (!ok) { res.writeHead(403, COI); return res.end('forbidden'); }
-    try { statSync(file); } catch {
+    let st;
+    try { st = statSync(file); } catch {
+        res.writeHead(404, { 'Content-Type': 'text/plain', ...COI });
+        return res.end('not found');
+    }
+    if (!st.isFile()) {
         res.writeHead(404, { 'Content-Type': 'text/plain', ...COI });
         return res.end('not found');
     }

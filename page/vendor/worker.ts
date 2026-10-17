@@ -592,6 +592,7 @@ function doStop() {
   wt = null;
   reader = null;
   writer = null;
+  if (rx) { try { rx.free(); } catch {} }
   rx = null;
   demux = null;
   inited = false;
@@ -736,7 +737,7 @@ async function runSrtLoop(myGen: number) {
 
 function processActions(actions: SrtAction[]) {
   for (const a of actions) {
-    if (VERBOSE) console.debug('srt action', a.kind, 'bytes', a.data.length);
+    if (VERBOSE) console.debug('srt action', a.kind, 'bytes', a.data?.length ?? 0);
     try {
       switch (a.kind) {
         case 0:
