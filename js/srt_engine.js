@@ -84,12 +84,12 @@ const STATS_KEYS = [
     'rxBuffered', 'rxAck', 'rxNak',
     'txData', 'txBytes', 'txRetransmit', 'txLoss', 'txBuffered',
 ];
-const STATS_F64 = { elapsedMs: 0, rttMs: 8 * 8, bandwidthBps: 9 * 8 };
+const STATS_F64 = { elapsedMs: 0, rttMs: 8 * 8 };
 const STATS_I64 = {
     rxData: 1 * 8, rxBytes: 2 * 8, rxLoss: 3 * 8, rxRetransmit: 4 * 8,
-    rxDropped: 5 * 8, rxAck: 6 * 8, rxNak: 7 * 8, rxBuffered: 10 * 8,
-    rxBelated: 11 * 8, txData: 12 * 8, txBytes: 13 * 8, txRetransmit: 14 * 8,
-    txLoss: 15 * 8, txBuffered: 16 * 8,
+    rxDropped: 5 * 8, rxAck: 6 * 8, rxNak: 7 * 8, bandwidthBps: 9 * 8,
+    rxBuffered: 10 * 8, rxBelated: 11 * 8, txData: 12 * 8, txBytes: 13 * 8,
+    txRetransmit: 14 * 8, txLoss: 15 * 8, txBuffered: 16 * 8,
 };
 
 // action scratch: payload cap 1128 + any SRT message envelope headroom

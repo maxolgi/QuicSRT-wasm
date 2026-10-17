@@ -170,6 +170,18 @@ if (gotKeys !== wantKeys) fail(`getStats() keys [${gotKeys}] != StatsMsg keys [$
 for (const k of EXPECTED_STATS_KEYS) {
     if (typeof s[k] !== 'number' || !Number.isFinite(s[k])) fail(`getStats().${k} is ${s[k]}, expected a finite Number`);
 }
+// int64-mapped counters must decode as integers: the u32-pair read always
+// yields integers; a mis-typed f64 read of an int64 field would surface a
+// denormal (this is exactly how a bandwidthBps misdecode would slip past
+// the finite check above).
+const INT64_KEYS = [
+    'rxData', 'rxBytes', 'rxLoss', 'rxRetransmit', 'rxDropped', 'rxAck', 'rxNak',
+    'bandwidthBps', 'rxBuffered', 'rxBelated',
+    'txData', 'txBytes', 'txRetransmit', 'txLoss', 'txBuffered',
+];
+for (const k of INT64_KEYS) {
+    if (!Number.isInteger(s[k])) fail(`getStats().${k} = ${s[k]}, expected an integer`);
+}
 if (s.rxData !== NUM_MESSAGES) fail(`rxData = ${s.rxData}, expected ${NUM_MESSAGES}`);
 if (!(s.rttMs > 0 && s.rttMs < SEED_RTT_MS)) fail(`rttMs = ${s.rttMs}, expected refined 0 < rtt < ${SEED_RTT_MS}`);
 if (s.rxLoss !== 0) fail(`rxLoss = ${s.rxLoss}, expected 0`);
