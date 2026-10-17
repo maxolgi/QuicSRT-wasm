@@ -115,6 +115,33 @@ imports it, line 75) and a copy of `ts_muxer_wasm_bg.wasm` into `page/bundle/` (
 resolves its wasm via `import.meta.url`, comment 129–132; currently only mpeg2ts + srt wasm are
 copied, 131–132). Vendoring note must record pin 854c25c like page/README.md:5.
 
+**Carried deltas — M6 step 4 vendoring as landed** (`page/vendor/stream-worker.ts` +
+`page/vendor/shared/publish.ts`, pin 854c25c; the pin note lives in each file's header
+because page/README.md belongs to the step-5 page wiring):
+
+1. [engine-swap] `stream-worker.ts` line-1 import swap exactly as planned above.
+2. [documented-divergence] the `flushTsToSrt()` sendMessage call site (the one code
+   adaptation beyond import swaps): `nowUs` dropped (engine-owned clocks; `timeoutMs`
+   stays at the default 0 = one send attempt per call, so the encoder-paced flush never
+   blocks), partial accepts (`rc > 0`) resume from the returned offset until drained,
+   `-1` drops the unsent remainder with a rate-limited console.warn (live too-late
+   semantics; srt's sndDropTooLate owns the backlog, and the Rust oracle never
+   retry-queues either), `-2` queues `{type:'close'}` mirroring the kind-4 handling,
+   `-3` is pre-guarded by `isHandshakeComplete()`, `-4`/`-5` warn once, and the
+   return-actions processing is gone — egress datagrams surface via the engine's own
+   drain path into the receive loop's existing `processActions`.
+3. `publish.ts` verbatim, zero code edits; its two type-only imports resolve inside
+   page/vendor/ (`'../stream-worker'` → the vendored worker, `'../worker'` → the
+   vendored viewer worker — note §3's table above misquotes this second specifier as
+   `'./worker'`; at the pin it is `'../worker'`).
+
+The rx-path `free()` delta stands as documented (§1/§5): the vendored worker still
+never calls `rx.free()` — per-session leak, finalizer-vs-doStop decision still open.
+tx* stats are now live: `sendMessage` landed in `js/srt_engine.js` with the C ABI send
+path (M6 steps 1–3), so publish sessions populate txData/txBytes/txRetransmit/txLoss/
+txBuffered; live verification rides M6 step 5 and the `js/test_contract.mjs` publisher
+case.
+
 ## 4. Page-side obligations (for the M6/M7 publish page, not the worker)
 
 The driver page must provide: `window.CERT_HASH` hex or null (stream.tsx:369/528–535),
@@ -134,7 +161,7 @@ credit loop from `credit` msgs (publish.ts:207–273), `AudioGraphManager` + `au
 | `isHandshakeComplete()` | ✅ (223–225) — but **derived** (first `srtw_get_stats` success, 281–286); gates all sends, must fire on the publish connection |
 | `getStats()` 17 fields incl. tx* | ✅ shape (234–255; STATS_KEYS 93–98) — tx values come from the C stats map; verify they populate once a send path exists |
 | `SrtAction` kind/takeData/free/text | ✅ plain-object form (124–133) — worker only uses takeData/free (454–499), compatible |
-| **`sendMessage(bytes, nowUs)`** | ❌ **MISSING — the one blocker** (documented 30–32: C ABI receive-only). Needs libwebsrt ReceiverCore send path + C ABI growth (PLAN.md:101–109) |
+| **`sendMessage(bytes[, timeoutMs])`** | ✅ **landed** (M6 steps 1–3, js/srt_engine.js): C ABI send path wired; returns the int contract (header delta 1), NOT `SrtAction[]` — the vendored worker's flushTsToSrt call-site delta (§3 carried-deltas block) adapts to it |
 | `free()` on rx | ✅ exists (268–277) but worker never calls it (§1) — C engine holds a socket + pthread per instance; without a FinalizationRegistry every publish session leaks. Decide: add finalizer to the wrapper or a vendoring delta that calls `rx.free()` in `doStop` |
 
 Deltas 2–5 (srt_engine.js:33–42) are receive-path notes that also bound the publish path:
