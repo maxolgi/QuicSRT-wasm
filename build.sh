@@ -37,12 +37,12 @@ case "${1:-}" in
         # FALLBACK below is what recovers, so it must stay reachable.
         git submodule update --init deps/libwebsrt || true
         # DEV FALLBACK: libwebsrt commits may be local-only until the human
-        # pushes ~/maxolgi/libwebsrt (master), so the pinned SHA can be
+        # pushes ~/maxolgi/WebSRT-cpp/libwebsrt (master), so the pinned SHA can be
         # missing from the GitHub clone -- fetch it from the local checkout
         # and check it out (goes dormant once every pin is pushed).
         pinned="$(git ls-tree HEAD deps/libwebsrt | awk '{print $3}')"
         if ! git -C deps/libwebsrt cat-file -e "${pinned}^{commit}" 2>/dev/null; then
-            git -C deps/libwebsrt fetch /home/flibb/maxolgi/libwebsrt master 2>/dev/null || true
+            git -C deps/libwebsrt fetch /home/flibb/maxolgi/WebSRT-cpp/libwebsrt master 2>/dev/null || true
             if [ "$(git -C deps/libwebsrt rev-parse HEAD)" != "$pinned" ]; then
                 git -C deps/libwebsrt checkout "$pinned"
             fi
