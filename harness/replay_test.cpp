@@ -65,8 +65,8 @@ sockaddr_in FillV4(const char* ip, uint16_t port)
     return sa;
 }
 
-// The label synthesized by the fork's bind-less listen for the receiver's
-// listener (the C ABI never binds); the publisher connects to it.
+// The label address the receiver's listener is bound to inside the core;
+// the publisher connects to it.
 struct BackWire
 {
     SRTVirtualTransport* peer        = nullptr; // the publisher's transport
