@@ -16,6 +16,8 @@
 //     SrtReceiver.newWithLatencyAndRtt(latencyMs, initialRttMs)
 //     handle_datagram(bytes: Uint8Array, now_us) -> SrtAction[]
 //     poll(now_us)                               -> SrtAction[]
+//     sendMessage(bytes[, timeoutMs])            -> Number (bytes accepted
+//                                                  or a negative status)
 //     isHandshakeComplete()                      -> boolean
 //     isClosed()                                 -> boolean
 //     getStats()                                 -> plain stats object
@@ -27,9 +29,16 @@
 //
 // Documented deltas vs lib.rs (all receive-path compatible with worker.ts):
 //
-//   1. sendMessage() is NOT implemented: the underlying C ABI
-//      (harness/receiver.h) is receive-only; the player worker never sends
-//      media data. worker.ts does not reference it.
+//   1. sendMessage(bytes[, timeoutMs]) returns the C ABI int, not lib.rs's
+//      SrtAction[]: >0 bytes accepted into SRT messages (a partial count
+//      when the deadline gave out - resume from bytes + returned), 0 for
+//      an empty buffer, negative status (-1 send buffer full until
+//      timeoutMs, -2 closed, -3 not handshaked, -4 invalid arg, -5
+//      error). The engine frames the buffer at the negotiated payload
+//      itself; the fragmented packets ride the seam ring and surface as
+//      kind-0 actions on the next handle_datagram/poll drain. The second
+//      argument is the send deadline in ms (default 0 = one attempt), not
+//      lib.rs's now_us.
 //   2. The now_us arguments are accepted but ignored: the C engine runs
 //      srt on its own pthreads with real clocks, so there is no JS-driven
 //      time base to feed.
@@ -47,6 +56,9 @@
 //   7. getStats() returns a plain object whose 17 Number fields are exactly
 //      the SrtStats getters worker.ts reads (serializeStats/emitLossEvents).
 //      Pre-connection it is all zeros, like lib.rs's fresh SocketStatistics.
+//      The tx* fields populate once sendMessage starts publishing (srt's
+//      sender counters on the same accepted socket); a receive-only session
+//      reads them as zero.
 //   8. isHandshakeComplete()/isClosed() are derived: handshake-complete is
 //      the first srtw_get_stats success (connection live), closed is a
 //      terminal srtw_poll error. Both are updated on the poll cycle, so
@@ -218,6 +230,30 @@ export class SrtReceiver {
         }
         this._drainOutgoing(out);
         return out;
+    }
+
+    // The publish direction (lib.rs sendMessage): hand the whole muxer
+    // chunk to the SRT sender on the accepted socket - the engine frames
+    // it into <= negotiated-payload messages itself, and the fragmented
+    // packets surface as kind-0 actions on the next drain, NOT as this
+    // call's return. Returns the C ABI int: >0 bytes accepted (a partial
+    // count when the deadline gave out - resume from bytes + returned),
+    // 0 for an empty buffer, negative status (-1 send buffer full until
+    // timeoutMs, -2 closed, -3 not handshaked, -4 invalid arg, -5
+    // error). timeoutMs bounds the whole call on the JS thread; 0 (the
+    // default) = one send attempt.
+    sendMessage(bytes, timeoutMs = 0) {
+        if (this._freed) {
+            return -2; // session torn down (kSendClosed)
+        }
+        if (!(bytes instanceof Uint8Array)) {
+            throw new TypeError('SrtReceiver.sendMessage: expected a Uint8Array');
+        }
+        const ptr = M._malloc(Math.max(1, bytes.length));
+        M.HEAPU8.set(bytes, ptr);
+        const rc = M._srtw_send_message(this._recv, ptr, bytes.length, timeoutMs | 0);
+        M._free(ptr);
+        return rc;
     }
 
     isHandshakeComplete() {

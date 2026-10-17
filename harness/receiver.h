@@ -9,6 +9,8 @@
 //                        transport + listen + accept thread
 //   srtw_handle_datagram inject one incoming datagram (the JS/WT thread)
 //   srtw_poll            deliver one SRT message, non-blocking
+//   srtw_send_message    publish bytes on the accepted socket (the
+//                        publish direction; SendResult return contract)
 //   srtw_get_stats       SrtwStats snapshot (see stats_map.h)
 //   srtw_receiver_free   close + release transport
 //
@@ -60,6 +62,23 @@ int srtw_handle_datagram(void* h, const uint8_t* data, int len);
 // stream has ended. Non-blocking (SRTO_RCVTIMEO = 0 semantics); buf should
 // be at least the 1128-byte payload size.
 int srtw_poll(void* h, uint8_t* buf, int cap);
+
+// Publish len bytes on the accepted socket - the publish direction
+// (ReceiverCore::SendMessage, the browser engine's sender half). One call
+// frames the buffer into SRT messages of at most the NEGOTIATED payload
+// (the HSv5 readback: effectively 940 = 5 x 188, not the configured
+// 1128); no remainder carries across calls. timeout_ms bounds the whole
+// call (0 = one send attempt) on the calling thread. The return mirrors
+// ReceiverCore::SendResult 1:1 - no translation, unlike srtw_poll:
+//   >0  bytes accepted; a partial count when the deadline or the session
+//       gave out midway - resume from buf + returned
+//    0  len == 0 (nothing emitted)
+//   -1  kSendTimeout - the send buffer stayed full until the deadline
+//   -2  kSendClosed - the session ended
+//   -3  kSendNotHandshaked - no connected accepted socket yet
+//   -4  kSendInvalidArg - null handle/buffer or negative len
+//   -5  kSendError - srt-level error
+int srtw_send_message(void* h, const uint8_t* buf, int len, int timeout_ms);
 
 // Snapshot the receiver's stats (0 ok, -1 when no connection is live).
 int srtw_get_stats(void* h, struct SrtwStats* out);

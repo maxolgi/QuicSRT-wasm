@@ -10,6 +10,9 @@
 //     Read(buf, cap, 0) maps kReadTimeout -> 0 (nothing ready yet) and
 //     every terminal outcome (kReadEnd/kReadClosed/kReadError) -> -1,
 //     the ABI's "stream ended or error" value.
+//   - the send pass-through: srtw_send_message returns SendMessage's int
+//     verbatim - its SendResult codes already are the ABI's contract
+//     (positive = bytes accepted), so unlike Read nothing folds.
 //
 // Shutdown() is never called: the wire end is only ever observed by Read
 // (srt delivers every TSBPD-buffered packet before erroring), so no drain
@@ -64,6 +67,15 @@ public:
         }
         using Read = websrt::ReceiverCore;
         return n == Read::kReadTimeout ? 0 : -1;
+    }
+
+    // SendMessage's SendResult codes are the ABI's own values, so the
+    // int passes through untouched (the null-handle guard answers
+    // kSendInvalidArg: -1 is kSendTimeout in this contract, unlike the
+    // sibling functions' -1 "bad handle").
+    int Send(const uint8_t* buf, int len, int timeout_ms)
+    {
+        return core_.SendMessage(reinterpret_cast<const char*>(buf), len, timeout_ms);
     }
 
     int Stats(struct SrtwStats* out)
@@ -147,6 +159,15 @@ int srtw_poll(void* h, uint8_t* buf, int cap)
         return -1;
     }
     return static_cast<SrtwReceiver*>(h)->Poll(buf, cap);
+}
+
+int srtw_send_message(void* h, const uint8_t* buf, int len, int timeout_ms)
+{
+    if (h == nullptr)
+    {
+        return websrt::ReceiverCore::kSendInvalidArg;
+    }
+    return static_cast<SrtwReceiver*>(h)->Send(buf, len, timeout_ms);
 }
 
 int srtw_get_stats(void* h, struct SrtwStats* out)
