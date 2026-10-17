@@ -69,7 +69,10 @@ const UTF8 = new TextDecoder('utf-8');
 function cstr(ptr) {
     let end = ptr;
     while (M.HEAPU8[end] !== 0) end++;
-    return UTF8.decode(M.HEAPU8.subarray(ptr, end));
+    // slice, not subarray: with -pthread the heap is a SharedArrayBuffer and
+    // Chrome's TextDecoder rejects shared views ("must not be shared"); node
+    // accepts them, which is why the parity harness never caught this.
+    return UTF8.decode(M.HEAPU8.slice(ptr, end));
 }
 
 // TsdFieldView is { const void* data; int count; int kind; } - 12 bytes,
