@@ -1,7 +1,7 @@
 // Wraps the mpeg2ts-wasm pkg. Feed SRT-delivered TS message bytes,
 // collect demux events, hand them to callbacks.
 
-import init, { TsDemuxer, type TsEvent, type DebugSnapshot } from '../wasm/mpeg2ts-wasm/mpeg2ts_wasm.js';
+import init, { TsDemuxer, type TsEvent, type DebugSnapshot } from '../../js/demux_engine.js';
 import type { AudioMeterData } from './shared/types';
 
 let initPromise: Promise<unknown> | null = null;

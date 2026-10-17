@@ -28,6 +28,9 @@ WebSRT/web/wasm (the built demuxer wasm pkgs - read-only reference).
 
 Known deltas: worker.ts line 1 swaps the Rust glue import for
 `../../js/srt_engine.js` (engine API deltas documented in `js/srt_engine.js`);
+demux.ts line 4 swaps the Rust demux pkg import for `../../js/demux_engine.js`
+(the M5 C++ demuxer behind the same surface; deltas documented in
+`js/demux_engine.js`);
 `page/wasm` is a symlink, not vendored sources. The M6 publisher pair
 `vendor/stream-worker.ts` + `vendor/shared/publish.ts` is vendored @ 854c25c
 as well: stream-worker.ts swaps the engine import the same way and adapts
