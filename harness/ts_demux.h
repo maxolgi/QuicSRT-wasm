@@ -25,12 +25,14 @@
 //   tsd_set_meter_selection             meter source selection
 //
 // Staged state (the parity harness excludes exactly these until the
-// remaining M5 steps land): SMPTE 302M decode (aes3) is not ported, so no
-// pcm events are emitted - only the meter pid/channel registry rides
-// along; the meter DSP itself (meter.rs) returns the documented empty
-// shapes. NAL scanning IS ported (harness/nal.{h,cpp}): pes events on
-// video PIDs (stream_type 0x1B/0x24) carry populated nalOffsets/nalTypes
-// and the snapshot's nalPids/nalStats/ringNal/ringNalOffsets are live.
+// remaining M5 steps land): NAL scanning IS ported (harness/nal.{h,cpp}):
+// pes events on video PIDs (stream_type 0x1B/0x24) carry populated
+// nalOffsets/nalTypes and the snapshot's nalPids/nalStats/ringNal/
+// ringNalOffsets are live. SMPTE 302M decode IS ported
+// (harness/aes3.{h,cpp}): BSSD PIDs' pes events are followed by kind-5
+// pcm events (samples as f32, program_num the channel count). Only the
+// meter DSP is staged out: the snapshot returns the documented empty
+// shapes, with just the pid/channel registry and the selection live.
 
 #ifndef SRTW_TS_DEMUX_H
 #define SRTW_TS_DEMUX_H
@@ -168,7 +170,8 @@ int tsd_ev_nal_offset_count(const TsEvent* e);
 const uint32_t* tsd_ev_nal_offsets(const TsEvent* e);
 int tsd_ev_nal_type_count(const TsEvent* e);
 const uint8_t* tsd_ev_nal_types(const TsEvent* e);
-// kind-5 samples: empty until the aes3 port (staged).
+// kind-5 samples: interleaved f32 PCM ([-1,1), 48 kHz), empty for every
+// other kind.
 int tsd_ev_sample_count(const TsEvent* e);
 const float* tsd_ev_samples(const TsEvent* e);
 

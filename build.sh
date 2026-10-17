@@ -90,10 +90,11 @@ case "${1:-}" in
         # (WebSRT web/src/shared/viewer.ts spawns a module worker), so the
         # emcc output must be importable - classic MODULARIZE scripts are
         # not. The .mjs extension also lets node import it directly.
-        # harness/ts_demux.cpp + harness/nal.cpp: the M5 demux C ABI
-        # (incl. the nal.rs scanner) alongside the receiver
-        # (js/demux_engine.js wraps the tsd_* exports).
-        em++ harness/receiver.cpp harness/stats_map.cpp harness/ts_demux.cpp harness/nal.cpp js/engine_shim.c "$LW_LIB" "$SRT_LIB" \
+        # harness/ts_demux.cpp + harness/nal.cpp + harness/aes3.cpp: the
+        # M5 demux C ABI (incl. the nal.rs scanner and the aes3.rs 302M
+        # unwrapper) alongside the receiver (js/demux_engine.js wraps the
+        # tsd_* exports).
+        em++ harness/receiver.cpp harness/stats_map.cpp harness/ts_demux.cpp harness/nal.cpp harness/aes3.cpp js/engine_shim.c "$LW_LIB" "$SRT_LIB" \
             -o build/srt_engine.mjs \
             -fexceptions -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -Os \
             -sMODULARIZE=1 -sEXPORT_NAME=createSrtEngineModule -sEXPORT_ES6=1 \

@@ -23,14 +23,17 @@
 // NAL scanning (nal.rs) is ported in harness/nal.{h,cpp}; finalize_pes
 // scans start codes once per reassembled PES on video PIDs (stream_type
 // 0x1B/0x24) and feeds the event's nal tables, the per-PID nalStats and
-// the ring's per-row NAL summaries exactly like lib.rs:696-729. Staged
-// until the aes3/meter tasks land (the parity harness excludes exactly
-// these): no SMPTE 302M decode (no pcm events; only the meter pid/channel
-// registry rides along, meter.rs 403-417), and the meter DSP returns the
-// documented empty shapes.
+// the ring's per-row NAL summaries exactly like lib.rs:696-729. SMPTE
+// 302M (aes3.rs) is ported in harness/aes3.{h,cpp}; finalize_pes decodes
+// BSSD PIDs' PES payloads to f32 and emits a kind-5 pcm event right
+// after the pes event, exactly like lib.rs:741-753. Staged until the
+// meter task lands (the parity harness excludes exactly these): the
+// meter DSP (meter.rs) returns the documented empty shapes - only the
+// pid/channel registry and the selection are live (meter.rs:403-417).
 
 #include "ts_demux.h"
 
+#include "aes3.h"
 #include "nal.h"
 
 #include <algorithm>
@@ -66,8 +69,6 @@ constexpr uint8_t KIND_ERROR = 4;
 constexpr uint8_t KIND_OTHER = 255;
 
 constexpr size_t HEX_CAP_BYTES = 512; // ring hex cap (lib.rs:47)
-
-constexpr uint8_t REGISTRATION_DESC_TAG = 0x05; // aes3.rs:22
 
 std::string HexPrefix(const uint8_t* p, size_t n) {
     n = std::min(n, HEX_CAP_BYTES);
@@ -680,43 +681,12 @@ bool IsValidUtf8(const uint8_t* p, size_t n) {
 
 std::string ExtractFormatId(const std::vector<Descriptor>& descriptors) {
     for (const Descriptor& d : descriptors) {
-        if (d.tag == REGISTRATION_DESC_TAG && d.data.size() >= 4 &&
+        if (d.tag == aes3::REGISTRATION_DESC_TAG && d.data.size() >= 4 &&
             IsValidUtf8(d.data.data(), 4)) {
             return std::string(reinterpret_cast<const char*>(d.data.data()), 4);
         }
     }
     return "";
-}
-
-// aes3.rs predicate: would unwrap_smpte302m_pes produce samples? The pcm
-// events themselves are staged out (aes3 task); the meter registry updates
-// exactly when Rust's update() would be called, i.e. when the decode
-// yields a non-empty vector: valid AES3 header + at least one whole data
-// chunk (chunks_exact drops the trailing partial).
-struct S302mInfo {
-    uint8_t channel_count;
-    size_t chunk_bytes;
-};
-
-std::optional<S302mInfo> S302mHeader(const uint8_t* p, size_t n) {
-    if (n < 4) return std::nullopt;
-    const uint32_t h = (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
-                       (static_cast<uint32_t>(p[2]) << 8) | p[3];
-    const uint8_t channel_count = static_cast<uint8_t>(((h >> 14) & 0x3) * 2 + 2);
-    const uint8_t bits = static_cast<uint8_t>(((h >> 4) & 0x3) * 4 + 16);
-    const bool channels_ok =
-        channel_count == 2 || channel_count == 4 || channel_count == 6 || channel_count == 8;
-    if (!channels_ok) return std::nullopt;
-    if (bits == 24) return S302mInfo{channel_count, 7};
-    if (bits == 20) return S302mInfo{channel_count, 6};
-    if (bits == 16) return S302mInfo{channel_count, 5};
-    return std::nullopt;
-}
-
-bool S302mHasSamples(const uint8_t* p, size_t n) {
-    const auto info = S302mHeader(p, n);
-    if (!info) return false;
-    return n - 4 >= info->chunk_bytes;
 }
 
 } // namespace
@@ -736,7 +706,7 @@ struct TsEvent {
     std::vector<std::string> pmt_format_ids;
     std::vector<uint32_t> nal_offsets; // flat [off, len, ...] relative to data (video pids)
     std::vector<uint8_t> nal_types;    // NAL type per NALU (video pids only)
-    std::vector<float> samples;        // empty until the aes3 port
+    std::vector<float> samples;        // decoded PCM (kind-5 pcm events only)
 
     static TsEvent Pat(uint16_t program_num, uint16_t pmt_pid) {
         TsEvent e;
@@ -783,6 +753,20 @@ struct TsEvent {
         TsEvent e;
         e.kind = 4;
         e.text = std::move(text);
+        return e;
+    }
+    // lib.rs:406-422: program_num carries the channel count (overloaded),
+    // stream_type the constant 0x06, dts -1, everything else empty/false.
+    static TsEvent Pcm(uint16_t pid, int64_t pts, uint8_t channel_count,
+                       std::vector<float> samples) {
+        TsEvent e;
+        e.kind = 5;
+        e.pid = pid;
+        e.pts = pts;
+        e.dts = -1;
+        e.stream_type = aes3::S302M_STREAM_TYPE;
+        e.program_num = channel_count;
+        e.samples = std::move(samples);
         return e;
     }
 };
@@ -1117,7 +1101,7 @@ struct TsDemuxer {
         return (static_cast<double>(total) * 8.0) / window_secs / 1000000.0;
     }
 
-    // ---- finalize_pes (lib.rs:662-768); pcm decode staged out
+    // ---- finalize_pes (lib.rs:662-768)
     void FinalizePes(uint16_t pid, const PesHeader& hdr, const std::vector<uint8_t>& payload,
                      bool ra, double t_ms, bool tei, bool pusi,
                      std::vector<std::unique_ptr<TsEvent>>& events) {
@@ -1181,10 +1165,22 @@ struct TsDemuxer {
         events.push_back(std::make_unique<TsEvent>(TsEvent::Pes(
             pid, hdr, payload, ra, std::move(nal_offsets), nal_types)));
 
-        if (IsSmpte302mPid(pid) && S302mHasSamples(payload.data(), payload.size())) {
-            // The pcm event is staged out (aes3 task); only the meter
-            // pid/channel registration rides along (meter.rs:403-417).
-            MeterUpdate(pid, S302mHeader(payload.data(), payload.size())->channel_count);
+        if (IsSmpte302mPid(pid)) {
+            // lib.rs:741-753: decode right after the pes event; the pcm
+            // event and the meter pid/channel registration ride the same
+            // non-empty decode condition as meter_state.update (a valid
+            // AES3 header plus at least one whole data chunk). Channel
+            // count comes from the per-PES AES3 header (sample rate is
+            // always 48000); the unwrap_or(2) arm is unreachable with
+            // non-empty samples but mirrored anyway.
+            std::vector<float> samples = aes3::UnwrapSmpte302mPes(payload.data(), payload.size());
+            if (!samples.empty()) {
+                const auto info = aes3::S302mInfoFromHeader(payload.data(), payload.size());
+                const uint8_t channel_count = info ? info->channel_count : 2;
+                MeterUpdate(pid, channel_count);
+                events.push_back(std::make_unique<TsEvent>(
+                    TsEvent::Pcm(pid, pts, channel_count, std::move(samples))));
+            }
         }
 
         PacketEntry e;
