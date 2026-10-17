@@ -1,3 +1,3 @@
-[submodule "deps/srt"]
-	path = deps/srt
-	url = https://github.com/maxolgi/srt.git
+[submodule "deps/libwebsrt"]
+	path = deps/libwebsrt
+	url = https://github.com/maxolgi/libwebsrt.git

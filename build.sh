@@ -6,9 +6,11 @@ usage() {
 Usage: ./build.sh <command>
 
 Commands:
-    setup    One-time: init deps/srt (falls back to the local fork clone for
-             unpushed pins)
-    lib      Configure + build the srt static lib with Emscripten
+    setup    One-time: init deps/libwebsrt + its nested deps/srt (falls back
+             to the local libwebsrt clone for unpushed pins)
+    lib      Configure + build libwebsrt's receiver-only flavor + the srt
+             static lib with Emscripten (WEBSRT_ENABLE_WT=OFF,
+             WEBSRT_RECEIVER_ONLY=ON -> websrt::receiver-core)
     harness  Build the M1 loopback gate test (build/loopback.js)
     replay   Build the M2 receiver replay gate test (build/replay.js)
     engine   Build the M3 JS engine wrapper module (build/srt_engine.mjs,
@@ -19,47 +21,65 @@ Commands:
 EOF
 }
 
+# libwebsrt's Emscripten flavor: the WT-free ReceiverCore (compiled by the
+# libwebsrt configure as a static lib) over the srt fork. Paths and lib
+# artifacts shared by the link steps below.
+SRT_INC="-Ideps/libwebsrt/deps/srt/srtcore -Ideps/libwebsrt/deps/srt/common -Ibuild/libwebsrt/deps/srt"
+LW_INC="-Ideps/libwebsrt/src"
+LW_LIB="build/libwebsrt/libwebsrt_receiver_core.a"
+# the srt submodule's own CMake puts its archive at the configure root
+SRT_LIB="build/libwebsrt/libsrt.a"
+
 case "${1:-}" in
     setup)
-        git submodule update --init deps/srt
-        # DEV FALLBACK: fork commits may be local-only until the human pushes
-        # ~/maxolgi/srt (branch websrt), so the pinned SHA can be missing from
-        # the GitHub clone -- fetch it from the local fork and check it out.
-        pinned="$(git ls-tree HEAD deps/srt | awk '{print $3}')"
-        if ! git -C deps/srt cat-file -e "${pinned}^{commit}" 2>/dev/null; then
-            git -C deps/srt fetch /home/flibb/maxolgi/srt websrt 2>/dev/null || true
-            if [ "$(git -C deps/srt rev-parse HEAD)" != "$pinned" ]; then
-                git -C deps/srt checkout "$pinned"
+        git submodule update --init deps/libwebsrt
+        # DEV FALLBACK: libwebsrt commits may be local-only until the human
+        # pushes ~/maxolgi/libwebsrt (master), so the pinned SHA can be
+        # missing from the GitHub clone -- fetch it from the local checkout
+        # and check it out (goes dormant once every pin is pushed).
+        pinned="$(git ls-tree HEAD deps/libwebsrt | awk '{print $3}')"
+        if ! git -C deps/libwebsrt cat-file -e "${pinned}^{commit}" 2>/dev/null; then
+            git -C deps/libwebsrt fetch /home/flibb/maxolgi/libwebsrt master 2>/dev/null || true
+            if [ "$(git -C deps/libwebsrt rev-parse HEAD)" != "$pinned" ]; then
+                git -C deps/libwebsrt checkout "$pinned"
             fi
         fi
+        # The nested srt pin rides the libwebsrt commit checked out above.
+        # Run inside the submodule, NOT --recursive: libwebsrt also carries
+        # deps/lsquic (WT-only) and srt its test submodules - neither builds
+        # here and they would just be cloned.
+        git -C deps/libwebsrt submodule update --init deps/srt
         ;;
     lib)
         source ~/emsdk/emsdk_env.sh
-        emcmake cmake -S deps/srt -B build/srt \
+        emcmake cmake -S deps/libwebsrt -B build/libwebsrt \
             -DCMAKE_BUILD_TYPE=Release \
-            -DENABLE_ENCRYPTION=OFF \
-            -DENABLE_VIRTUAL_TRANSPORT=ON \
-            -DENABLE_APPS=OFF \
-            -DENABLE_SHARED=OFF \
-            -DENABLE_STATIC=ON \
+            -DWEBSRT_ENABLE_WT=OFF \
+            -DWEBSRT_RECEIVER_ONLY=ON \
             -DCMAKE_C_FLAGS="-pthread -fexceptions" \
             -DCMAKE_CXX_FLAGS="-pthread -fexceptions"
-        cmake --build build/srt -j "$(nproc)" --target srt_static
+        cmake --build build/libwebsrt -j "$(nproc)" --target websrt_receiver_core
         ;;
     harness)
         source ~/emsdk/emsdk_env.sh
-        em++ harness/loopback.cpp build/srt/libsrt.a -o build/loopback.js \
+        # CJS marker: the emcc output uses require(); without this the
+        # nearest package.json (~: "type": "module", the desktop app's)
+        # makes node reject it as ESM. The .mjs engine output is exempt
+        # by extension.
+        printf '{"type":"commonjs"}\n' > build/package.json
+        em++ harness/loopback.cpp "$SRT_LIB" -o build/loopback.js \
             -fexceptions -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -Os \
             -DSRT_ENABLE_VIRTUAL_TRANSPORT \
-            -Ideps/srt/srtcore -Ideps/srt/common -Ibuild/srt
+            $SRT_INC
         ;;
     replay)
         source ~/emsdk/emsdk_env.sh
-        em++ harness/replay_test.cpp harness/receiver.cpp harness/stats_map.cpp build/srt/libsrt.a \
+        printf '{"type":"commonjs"}\n' > build/package.json
+        em++ harness/replay_test.cpp harness/receiver.cpp harness/stats_map.cpp "$LW_LIB" "$SRT_LIB" \
             -o build/replay.js \
             -fexceptions -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -Os \
             -DSRT_ENABLE_VIRTUAL_TRANSPORT \
-            -Ideps/srt/srtcore -Ideps/srt/common -Ibuild/srt
+            -Iharness $LW_INC $SRT_INC
         ;;
     engine)
         source ~/emsdk/emsdk_env.sh
@@ -67,14 +87,14 @@ case "${1:-}" in
         # (WebSRT web/src/shared/viewer.ts spawns a module worker), so the
         # emcc output must be importable - classic MODULARIZE scripts are
         # not. The .mjs extension also lets node import it directly.
-        em++ harness/receiver.cpp harness/stats_map.cpp js/engine_shim.c build/srt/libsrt.a \
+        em++ harness/receiver.cpp harness/stats_map.cpp js/engine_shim.c "$LW_LIB" "$SRT_LIB" \
             -o build/srt_engine.mjs \
             -fexceptions -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -Os \
             -sMODULARIZE=1 -sEXPORT_NAME=createSrtEngineModule -sEXPORT_ES6=1 \
             -sEXPORTED_FUNCTIONS=_srtw_init,_srtw_engine_new,_srtw_engine_receiver,_srtw_handle_datagram,_srtw_poll,_srtw_poll_outgoing,_srtw_get_stats,_srtw_engine_free,_srtw_test_publisher_start,_srtw_test_publisher_inject,_srtw_test_publisher_poll,_malloc,_free \
             -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU32,HEAPF64 \
             -DSRT_ENABLE_VIRTUAL_TRANSPORT \
-            -Iharness -Ideps/srt/srtcore -Ideps/srt/common -Ibuild/srt
+            -Iharness $LW_INC $SRT_INC
         ;;
     page)
         # esbuild from the WebSRT checkout (no npm install here). The worker

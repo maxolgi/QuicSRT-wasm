@@ -1,8 +1,8 @@
-// The M2 receiver C ABI: the libwebsrt subscriber session
-// (src/srt_session/subscriber.{h,cpp} - SRT listener role over the fork's
-// virtual-transport seam) ported behind extern "C" for the browser player
-// engine, minus its WTClient layer. The JS wrapper is built against exactly
-// this surface.
+// The M2 receiver C ABI: libwebsrt's WT-free ReceiverCore
+// (deps/libwebsrt/src/srt_session/receiver_core.{h,cpp} - SRT listener
+// role over the fork's virtual-transport seam, the same machinery the
+// native subscriber session uses) behind extern "C" for the browser
+// player engine. The JS wrapper is built against exactly this surface.
 //
 //   srtw_init            srt_startup, once, idempotent
 //   srtw_receiver_new    listener socket + options + attached virtual
@@ -12,20 +12,22 @@
 //   srtw_get_stats       SrtwStats snapshot (see stats_map.h)
 //   srtw_receiver_free   close + release transport
 //
-// Socket options are set on the listener BEFORE srt_listen and inherited by
-// the accepted socket, per subscriber.h: SRTO_TRANSTYPE SRTT_LIVE first (it
-// resets the latency/payload presets), then SRTO_PAYLOADSIZE 1128,
-// SRTO_RCVLATENCY/SRTO_PEERLATENCY latency_ms, SRTO_SNDBUF/SRTO_RCVBUF
-// clamp(latency_ms * 40, 8192, 320000) packets x 1472 bytes, SRTO_SKIP_INDUCTION
-// 1, and SRTO_INITIAL_RTT rtt_ms when rtt_ms > 0 (clamped to 1..30000).
+// Socket options, buffer sizing, and the fixed teardown order (accepted
+// socket, listener, accept-thread join, transport release - srt_close
+// sends its shutdown through the send callback, so the transport must
+// outlive both closes) are ReceiverCore's, set on the listener BEFORE
+// srt_listen and inherited by the accepted socket: SRTO_TRANSTYPE
+// SRTT_LIVE first (it resets the latency/payload presets), then
+// SRTO_PAYLOADSIZE 1128, SRTO_RCVLATENCY/SRTO_PEERLATENCY latency_ms,
+// SRTO_SNDBUF/SRTO_RCVBUF clamp(latency_ms * 40, 8192, 320000) packets
+// x 1472 bytes, SRTO_SKIP_INDUCTION 1, and SRTO_INITIAL_RTT rtt_ms when
+// rtt_ms > 0 (clamped to 1..30000).
 //
-// Threading (subscriber.cpp's shape): handle_datagram/poll/free run on the
+// Threading (ReceiverCore's shape): handle_datagram/poll/free run on the
 // JS thread; the virtual-transport send callback fires on srt's internal
 // threads and touches nothing but send_fn (which must be thread-safe); a
 // short-lived accept thread parks in srt_accept until the handshake
-// completes. The shutdown order is fixed: accepted socket, listener, accept
-// thread join, transport release - srt_close sends its shutdown through the
-// send callback, so the transport must outlive both closes.
+// completes.
 
 #ifndef SRTW_RECEIVER_H
 #define SRTW_RECEIVER_H

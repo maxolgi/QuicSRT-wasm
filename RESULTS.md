@@ -12,6 +12,7 @@ criterion came back green. All numbers below are from this machine, 2026-10-16.
 | M2 receiver + stats | replay gate exit 0; contract test through the JS API exit 0; all 17 Rust `SrtStats` fields mapped, none zeroed |
 | M3 live | in-browser vs local websrt-gateway-cpp: handshake, 75k msgs / 52.8 MB delivered, rtt 0.5 ms, demux -> valid avc1 config |
 | M4 A/B (live, 35 s, both engines, zero loss/drop both sides) | see below |
+| M5 libwebsrt consume | receiver delegates to libwebsrt's WT-free ReceiverCore (deps/libwebsrt receiver-only Emscripten flavor); loopback/replay/contract/ab_smoke green; live A/B vs websrt-cpp: 14/14 aligned buckets byte-exact, 0 loss/drop; bonus: player vs the RUST gateway (the 940-payload HSv5 quirk, never tested before) decodes video; engine 788 KB |
 
 ## M4 A/B — same live stream, two engines, one page (commit b6a4fc0 harness)
 
@@ -42,10 +43,10 @@ calls it); stats are plain numbers, actions plain objects.
 
 ## Known limitations
 
-- Fork commits are local until pushed: 5 commits on `~/maxolgi/srt` websrt ahead of origin
-  (skip-induction-connector fix + 4 Emscripten commits). Push, then this repo's pin
-  (currently 952d20e) resolves from GitHub without the local-fetch fallback in
-  `build.sh setup`.
+- libwebsrt pin is local until pushed: `deps/libwebsrt` @ e5277c9 adds the
+  `WEBSRT_RECEIVER_ONLY` CMake flavor (the srt fork pin inside it, f1617ea,
+  is pushed). Push `~/maxolgi/libwebsrt` (master) and `build.sh setup`'s
+  local-fetch fallback goes dormant.
 - Visual playback VERIFIED (after M3 writeup): the page's decode pipeline defaulted to
   `prefer-hardware`, which this GPU-less machine's Chrome rejects (VideoDecoder.configure
   OperationError; the reference player hits the same wall). The vendored hw/sw toggle
