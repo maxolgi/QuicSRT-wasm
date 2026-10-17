@@ -28,11 +28,23 @@
 //    harness cannot silently pass everything.
 //
 // Usage:
-//   node js/demux_parity.mjs [--cpp] [--exclude=<entry>]...
+//   node js/demux_parity.mjs [--cpp] [--m5-stage <core|nal|aes3|meter|full>]
+//                            [--exclude=<entry>]...
 //
 // --cpp runs side B on the C++ port (build/srt_engine.mjs via
 // js/demux_engine.js) instead of a second Rust instance; default stays
 // Rust-vs-Rust. The comparator/canonicalizer are shared.
+//
+// --m5-stage <name> expands to that stage's CANONICAL exclusion set (the
+// M5_STAGE_EXCLUSIONS table below): the staged fields NOT yet ported by
+// that M5 step - core = the demux-core-only set (pcm kind x6, pes nal x2,
+// snapshot nal x4, meter DSP x8, 20 entries), nal = core minus the 6 nal
+// entries (nal.rs ported), aes3 = nal minus the pcm kind (aes3.rs
+// ported), meter = aes3 minus the 8 meter DSP fields (meter.rs ported),
+// full = none (identical to the flagless run; meter and full coincide -
+// both kept so the flag reads forward). Default with no --m5-stage flag
+// is the unchanged full comparison; --exclude entries stack on top of a
+// stage's set.
 //
 // TEMPORARY staged exclusions for the C++ port rollout (M5 steps 2-5):
 // each --exclude entry drops ONE field from comparison - "kind:field" for
@@ -107,38 +119,97 @@ const METER_TOLERANCE = 1e-6; // abs, dB
 
 // ---- staged exclusions (TEMPORARY; see header) --------------------------------
 
+// --m5-stage canonical exclusion sets: each stage's set is the full §4
+// compared surface minus everything the C++ port implements BY that stage
+// (later stages are strict subsets - the shrink schedule for the M5 port
+// tasks, frozen here so each task only flips the stage name):
+//   core  demux core only: pcm kind staged out entirely (aes3 pending),
+//         pes nal tables + snapshot nal fields empty (nal pending), meter
+//         DSP empty shapes (meter pending) - M5 step 4's 20-entry set.
+//   nal   + nal.rs: drops pes:nalOffsets, pes:nalTypes, nalPids, nalStats,
+//         ringNal, ringNalOffsets.
+//   aes3  + aes3.rs: also drops the 6 pcm:* entries (kind-5 events now
+//         exist and compare in full).
+//   meter + meter.rs: also drops the 8 meter DSP fields.
+//   full  no exclusions - identical to the flagless run (meter/full
+//         coincide; both kept so the flag reads forward).
+const M5_STAGE_EXCLUSIONS = {
+    core: [
+        'pcm:pid', 'pcm:pts', 'pcm:streamType', 'pcm:programNum', 'pcm:sampleCount', 'pcm:samplesSha256',
+        'pes:nalOffsets', 'pes:nalTypes',
+        'nalPids', 'nalStats', 'ringNal', 'ringNalOffsets',
+        'peaks', 'rms', 'clips', 'lufs', 'phase', 'scopeL', 'scopeR', 'spectrum',
+    ],
+    nal: [
+        'pcm:pid', 'pcm:pts', 'pcm:streamType', 'pcm:programNum', 'pcm:sampleCount', 'pcm:samplesSha256',
+        'peaks', 'rms', 'clips', 'lufs', 'phase', 'scopeL', 'scopeR', 'spectrum',
+    ],
+    aes3: ['peaks', 'rms', 'clips', 'lufs', 'phase', 'scopeL', 'scopeR', 'spectrum'],
+    meter: [],
+    full: [],
+};
+
 const EXCLUDE_EVENTS = new Map(); // kind name -> Set<field>
 const EXCLUDE_SNAPSHOT = new Set();
 let CPP = false; // --cpp: side B runs the C++ port instead of Rust
-for (const arg of process.argv.slice(2)) {
-    if (arg === '--cpp') {
-        CPP = true;
-        continue;
+let M5_STAGE = null; // --m5-stage <name>: canonical staged-exclusion set
+{
+    // Pass 1 collects flags and expands the stage into --exclude entries;
+    // pass 2 validates them all through the same path (stage entries are
+    // hardcoded valid, but routing them through the identical check keeps
+    // the table honest).
+    const raw = process.argv.slice(2);
+    const excludeArgs = [];
+    for (let i = 0; i < raw.length; i++) {
+        const arg = raw[i];
+        if (arg === '--cpp') {
+            CPP = true;
+            continue;
+        }
+        if (arg === '--m5-stage' || arg.startsWith('--m5-stage=')) {
+            const stage = arg.startsWith('--m5-stage=') ? arg.slice('--m5-stage='.length) : raw[++i];
+            if (stage === undefined || !Object.prototype.hasOwnProperty.call(M5_STAGE_EXCLUSIONS, stage)) {
+                fail(`bad --m5-stage "${stage ?? ''}" - expected one of {${Object.keys(M5_STAGE_EXCLUSIONS).join('|')}}`);
+            }
+            if (M5_STAGE !== null && M5_STAGE !== stage) {
+                fail(`--m5-stage given twice (${M5_STAGE} and ${stage}) - one stage per run`);
+            }
+            M5_STAGE = stage;
+            excludeArgs.push(...M5_STAGE_EXCLUSIONS[stage].map((e) => `--exclude=${e}`));
+            continue;
+        }
+        if (!arg.startsWith('--exclude=')) {
+            fail(`unknown argument "${arg}" (usage: node js/demux_parity.mjs [--cpp] [--m5-stage <core|nal|aes3|meter|full>] [--exclude=kind:field | --exclude=snapshot-field]...)`);
+        }
+        excludeArgs.push(arg);
     }
-    if (!arg.startsWith('--exclude=')) {
-        fail(`unknown argument "${arg}" (usage: node js/demux_parity.mjs [--cpp] [--exclude=kind:field | --exclude=snapshot-field]...)`);
-    }
-    const entry = arg.slice('--exclude='.length);
-    const colon = entry.indexOf(':');
-    if (colon !== -1) {
-        const kind = entry.slice(0, colon);
-        const field = entry.slice(colon + 1);
-        if (!KIND_NAMES.includes(kind) || !EVENT_FIELDS[kind].includes(field)) {
-            fail(`bad event exclusion "${entry}" - expected kind:field, kind in {${KIND_NAMES.join('|')}} and field in that kind's §4.1 canonical form`);
+    for (const arg of excludeArgs) {
+        const entry = arg.slice('--exclude='.length);
+        const colon = entry.indexOf(':');
+        if (colon !== -1) {
+            const kind = entry.slice(0, colon);
+            const field = entry.slice(colon + 1);
+            if (!KIND_NAMES.includes(kind) || !EVENT_FIELDS[kind].includes(field)) {
+                fail(`bad event exclusion "${entry}" - expected kind:field, kind in {${KIND_NAMES.join('|')}} and field in that kind's §4.1 canonical form`);
+            }
+            if (!EXCLUDE_EVENTS.has(kind)) EXCLUDE_EVENTS.set(kind, new Set());
+            EXCLUDE_EVENTS.get(kind).add(field);
+        } else {
+            if (WALL_CLOCK_FIELDS.includes(entry)) {
+                fail(`"${entry}" is excluded by spec §4.2 (wall clock) - staged exclusions apply to compared fields only`);
+            }
+            if (!SNAPSHOT_FIELDS.includes(entry) && !METER_FIELDS.includes(entry)) {
+                fail(`bad snapshot exclusion "${entry}" - expected a DebugSnapshot or MeterSnapshot field name`);
+            }
+            EXCLUDE_SNAPSHOT.add(entry);
         }
-        if (!EXCLUDE_EVENTS.has(kind)) EXCLUDE_EVENTS.set(kind, new Set());
-        EXCLUDE_EVENTS.get(kind).add(field);
-    } else {
-        if (WALL_CLOCK_FIELDS.includes(entry)) {
-            fail(`"${entry}" is excluded by spec §4.2 (wall clock) - staged exclusions apply to compared fields only`);
-        }
-        if (!SNAPSHOT_FIELDS.includes(entry) && !METER_FIELDS.includes(entry)) {
-            fail(`bad snapshot exclusion "${entry}" - expected a DebugSnapshot or MeterSnapshot field name`);
-        }
-        EXCLUDE_SNAPSHOT.add(entry);
     }
 }
 {
+    if (M5_STAGE !== null) {
+        const n = M5_STAGE_EXCLUSIONS[M5_STAGE].length;
+        console.log(`note: --m5-stage ${M5_STAGE} - canonical staged-exclusion set${n === 0 ? ' (empty: identical to the flagless full comparison)' : ` (${n} entries)`}`);
+    }
     const entries = [...EXCLUDE_EVENTS].flatMap(([k, s]) => [...s].map((f) => `${k}:${f}`)).concat([...EXCLUDE_SNAPSHOT]);
     if (entries.length > 0) {
         console.log(`note: TEMPORARY staged exclusions active (C++ port rollout): ${entries.join(', ')} - skipped comparisons are counted and reported in the summary`);
