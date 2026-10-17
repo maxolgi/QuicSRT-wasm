@@ -139,10 +139,8 @@ Steps (each its own commit, gate before moving on):
    self-published `s302m` stream (PCM + meter DSP with sane values). The
    minimal M3 page mounts no debug panel; DebugSnapshot/meter data was
    verified over the worker protocol (the same events the vendored viewer
-   hands the debug UI). Known wrinkle for a follow-up: `js/srt_engine.js`
-   and `js/demux_engine.js` each instantiate their own copy of
-   `build/srt_engine.mjs` in the player worker (two 16 MB heaps) —
-   functional, but not the intended single shared instance.
+   hands the debug UI). Two-instance wrinkle RESOLVED: 12c498e (one
+   cached factory call via js/engine_module.js, shared by both wrappers).
 7. Perf snapshot before/after (same stream, same machine): per-frame
    feed→onPes latency percentiles + GC/long-task count via
    PerformanceObserver → verify: written into the commit message or
