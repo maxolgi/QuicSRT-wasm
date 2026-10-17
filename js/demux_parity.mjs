@@ -28,15 +28,22 @@
 //    harness cannot silently pass everything.
 //
 // Usage:
-//   node js/demux_parity.mjs [--exclude=<entry>]...
+//   node js/demux_parity.mjs [--cpp] [--exclude=<entry>]...
+//
+// --cpp runs side B on the C++ port (build/srt_engine.mjs via
+// js/demux_engine.js) instead of a second Rust instance; default stays
+// Rust-vs-Rust. The comparator/canonicalizer are shared.
 //
 // TEMPORARY staged exclusions for the C++ port rollout (M5 steps 2-5):
 // each --exclude entry drops ONE field from comparison - "kind:field" for
 // events (pat/pmt/pes/random_access/error/pcm, e.g. pes:pts) or a bare
 // DebugSnapshot/MeterSnapshot field name (e.g. ringHex, lufs). Excluded
 // comparisons are COUNTED and printed in the summary, never silently
-// skipped. Default (no flags) is the full §4 rule set; every exclusion
-// must be gone again before M5 step 6 ships.
+// skipped. When EVERY field of one event kind is excluded, that kind is
+// staged out entirely: its events are dropped from both sides before the
+// count/field comparison (counted the same way). Default (no flags) is
+// the full §4 rule set; every exclusion must be gone again before M5
+// step 6 ships.
 //
 // Exit 0 = pass; on divergence exit 1 with case id, feed, byte offset,
 // event index, field name and both values (§5.6).
@@ -102,9 +109,14 @@ const METER_TOLERANCE = 1e-6; // abs, dB
 
 const EXCLUDE_EVENTS = new Map(); // kind name -> Set<field>
 const EXCLUDE_SNAPSHOT = new Set();
+let CPP = false; // --cpp: side B runs the C++ port instead of Rust
 for (const arg of process.argv.slice(2)) {
+    if (arg === '--cpp') {
+        CPP = true;
+        continue;
+    }
     if (!arg.startsWith('--exclude=')) {
-        fail(`unknown argument "${arg}" (usage: node js/demux_parity.mjs [--exclude=kind:field | --exclude=snapshot-field]...)`);
+        fail(`unknown argument "${arg}" (usage: node js/demux_parity.mjs [--cpp] [--exclude=kind:field | --exclude=snapshot-field]...)`);
     }
     const entry = arg.slice('--exclude='.length);
     const colon = entry.indexOf(':');
@@ -134,6 +146,16 @@ for (const arg of process.argv.slice(2)) {
 }
 const EXCLUDED_COUNTS = new Map(); // entry -> comparisons skipped
 const countExcluded = (entry) => EXCLUDED_COUNTS.set(entry, (EXCLUDED_COUNTS.get(entry) ?? 0) + 1);
+
+// A kind whose EVERY §4.1 field is excluded is staged out entirely (see
+// runCase): its events are dropped from both sides of the comparison.
+const kindStagedOut = (kind) => {
+    const excl = EXCLUDE_EVENTS.get(kind);
+    return excl !== undefined && excl.size === EVENT_FIELDS[kind].length;
+};
+const countKindStagedOut = (kind) => {
+    for (const f of EVENT_FIELDS[kind]) countExcluded(`${kind}:${f}`);
+};
 
 const COUNTS = {
     caseRuns: 0,
@@ -494,6 +516,18 @@ async function loadRustSource() {
     };
 }
 
+// SEAM, C++ side: the M5 port (harness/ts_demux.{h,cpp}) exported from the
+// engine module and wrapped by js/demux_engine.js into the same
+// wasm-bindgen surface. Same { label, createDemuxer } shape as above.
+async function loadCppSource() {
+    const engine = await import('./demux_engine.js');
+    await engine.default(); // loads build/srt_engine.mjs (built by ./build.sh engine)
+    return {
+        label: 'cpp:srt_engine.mjs (harness/ts_demux)',
+        createDemuxer: () => new engine.TsDemuxer(),
+    };
+}
+
 // ---- runners ---------------------------------------------------------------------
 
 // Drives two demuxers over identical chunk lists in lockstep; after every
@@ -524,27 +558,38 @@ function runCase(spec) {
             }
             const evA = dA.feed(ca);
             const evB = dB.feed(cb);
-            if (evA.length !== evB.length) {
-                diverge(ctx, `event #${eventIdx} (feed #${feed} @ +${byteOff}B)`, 'feed event count', evA.length, evB.length);
-            }
-            for (let i = 0; i < evA.length; i++) {
-                const a = evA[i];
-                const b = evB[i];
-                const cA = canonEvent(a, spec.id, watch);
-                const cB = canonEvent(b, spec.id, null);
-                try {
-                    compareEvents(cA, cB, ctx, `event #${eventIdx} (feed #${feed} @ +${byteOff}B)`);
-                    // side-A metadata for the per-case gates below
-                    meta.kinds[KIND_NAMES.indexOf(cA.kind)]++;
-                    if (cA.kind === 'pes' && cA.dts >= 0) meta.pesDtsNonNeg++;
-                    if (cA.kind === 'pmt' && meta.firstPmt === null) meta.firstPmt = cA.pmtEntries;
-                    if (cA.kind === 'pcm' && meta.firstPcm === null) meta.firstPcm = cA;
-                    if (spec.recordA !== undefined) spec.recordA.push(cA);
-                } finally {
-                    a.free();
-                    b.free();
+            const cA = evA.map((e) => canonEvent(e, spec.id, watch));
+            const cB = evB.map((e) => canonEvent(e, spec.id, null));
+            try {
+                // side-A metadata for the per-case gates below - collected
+                // from every canonical event, including kinds staged out
+                // below (the S5-S7 pcm gates must still see them)
+                for (const c of cA) {
+                    meta.kinds[KIND_NAMES.indexOf(c.kind)]++;
+                    if (c.kind === 'pes' && c.dts >= 0) meta.pesDtsNonNeg++;
+                    if (c.kind === 'pmt' && meta.firstPmt === null) meta.firstPmt = c.pmtEntries;
+                    if (c.kind === 'pcm' && meta.firstPcm === null) meta.firstPcm = c;
+                    if (spec.recordA !== undefined) spec.recordA.push(c);
                 }
-                eventIdx++;
+                // staged-out kinds: drop from BOTH sides before the count
+                // check (a not-yet-ported kind exists on one side only),
+                // counting each dropped side-A event per excluded field
+                const keptA = [];
+                for (const c of cA) {
+                    if (kindStagedOut(c.kind)) countKindStagedOut(c.kind);
+                    else keptA.push(c);
+                }
+                const keptB = cB.filter((c) => !kindStagedOut(c.kind));
+                if (keptA.length !== keptB.length) {
+                    diverge(ctx, `event #${eventIdx} (feed #${feed} @ +${byteOff}B)`, 'feed event count', keptA.length, keptB.length);
+                }
+                for (let i = 0; i < keptA.length; i++) {
+                    compareEvents(keptA[i], keptB[i], ctx, `event #${eventIdx} (feed #${feed} @ +${byteOff}B)`);
+                    eventIdx++;
+                }
+            } finally {
+                for (const e of evA) e.free();
+                for (const e of evB) e.free();
             }
             const sA = dA.debugSnapshot();
             const sB = dB.debugSnapshot();
@@ -656,9 +701,9 @@ const S1 = FIX.get('av_shortgop.ts');
 // ---- 2. sources -------------------------------------------------------------------
 
 const SRC_A = await loadRustSource();
-const SRC_B = SRC_A; // §5.1 Rust-vs-Rust: one pkg import, two instances.
-                      // M5 steps 2-5: SRC_B becomes the C++ loader from the SEAM above.
-pass(`side A = side B = ${SRC_A.label}`);
+const SRC_B = CPP ? await loadCppSource() : SRC_A; // §5.1 Rust-vs-Rust: one
+                      // pkg import, two instances. --cpp: side B = the port.
+pass(`side A = ${SRC_A.label}, side B = ${SRC_B === SRC_A ? 'side A' : SRC_B.label}`);
 
 // ---- 3. golden fixtures + crafted corruptions (§1/§2) + §4.3 selection passes ------
 
