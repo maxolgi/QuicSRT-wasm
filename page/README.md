@@ -112,6 +112,14 @@ with the vendored `formatPubStats`).
   open `http://localhost:8099/publish.html`, Capture (getUserMedia), then
   Publish. Round-trip check: the viewer link (or the M3 player with the
   same `?stream=` name) plays it back.
+- `?source=canvas` (automated-gate / no-camera mode, M6 step 5 enabler):
+  replaces the getUserMedia capture with an animated canvas test pattern
+  (crawling color bars + counting timestamp + per-run id) via
+  `canvas.captureStream(30)`, feeding the exact same downstream path
+  (preview element, FramePump/rVFC, codec detection, worker protocol).
+  Audio stays absent - the selector is disabled at `(none)` and no mic is
+  acquired - so this mode covers neither the mic-audio path nor real
+  device capture; without the param the page is unchanged (getUserMedia).
 - URL: the `url:` field, default `wt://127.0.0.1:4435` (the local
   `websrt-cpp` gateway; `wt://host:port` is shorthand for
   `https://host:port/wt`). The `publish=` query always comes from the

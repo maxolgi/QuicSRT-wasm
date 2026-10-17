@@ -5,7 +5,8 @@
 // mirroring WebSRT's publish UI (web/src/stream.tsx @ 854c25c). Deltas vs
 // that UI are deliberate and listed in page/README.md: webcam-only
 // getUserMedia capture (no screen capture / tab audio / camera picker), a
-// plain <pre> log instead of the preact debug panel, no stream-back player
+// ?source=canvas hardware-free test-source mode (README), a plain <pre>
+// log instead of the preact debug panel, no stream-back player
 // (the viewer link points at the M3 player), and a publish URL input
 // (wt://host:port shorthand, default the local websrt-cpp gateway) instead
 // of ?host=/?port=/window.WT_PORT resolution. cert-hash.js is proxied by
@@ -116,9 +117,23 @@ async function enumerateMics(): Promise<void> {
     } catch { /* ignore */ }
 }
 
-// ─── Capture (webcam getUserMedia) ────────────────────────────────
+// ─── Capture (webcam getUserMedia / ?source=canvas) ───────────────
 
-async function startCapture(): Promise<void> {
+// ?source=canvas: hardware-free mode for the automated live gate - an
+// animated canvas replaces getUserMedia as the MediaStream source; the
+// downstream path (preview element, FramePump/rVFC, codec detection,
+// worker protocol) is identical. No audio in this mode: the selector
+// stays disabled at (none) - no mic is acquired either. Without the
+// param, behavior is unchanged (getUserMedia).
+const canvasMode = new URLSearchParams(location.search).get('source') === 'canvas';
+const CANVAS_W = 1280;
+const CANVAS_H = 720;
+
+let canvasEl: HTMLCanvasElement | null = null;
+let canvasRafId = 0;
+let canvasFrame = 0;
+
+async function getUserMediaStream(): Promise<MediaStream> {
     const stream = await navigator.mediaDevices.getUserMedia({
         video: {
             width: { ideal: 1920 },
@@ -142,6 +157,57 @@ async function startCapture(): Promise<void> {
             audioSourceSelect.value = micDeviceId;
         }
     }
+    return stream;
+}
+
+// Animated test pattern: crawling color bars over a per-frame counter +
+// wall-clock timestamp and a per-run random id - visibly unique per run,
+// so playback/ffprobe can eyeball motion. Painted via rAF, sampled by
+// captureStream(30).
+function startCanvasSource(): MediaStream {
+    const runId = Math.random().toString(16).slice(2, 8);
+    const cv = document.createElement('canvas');
+    cv.width = CANVAS_W;
+    cv.height = CANVAS_H;
+    // Laid out offscreen rather than display:none so paints stay live; the
+    // preview video element shows the content, the status line marks the mode.
+    cv.style.cssText = 'position:fixed;left:-9999px;bottom:0';
+    document.body.appendChild(cv);
+    canvasEl = cv;
+    const ctx = cv.getContext('2d')!;
+    const bars = ['#c33', '#3c3', '#33c', '#cc3', '#c3c', '#3cc'];
+    const t0 = performance.now();
+    const paint = (): void => {
+        const t = (performance.now() - t0) / 1000;
+        const bw = CANVAS_W / bars.length;
+        const slide = Math.round((t * 90) % bw); // crawl left at 90 px/s
+        for (let i = 0; i <= bars.length; i++) {
+            ctx.fillStyle = bars[i % bars.length];
+            ctx.fillRect(Math.round(i * bw) - slide, 0, Math.ceil(bw) + 1, CANVAS_H);
+        }
+        ctx.fillStyle = 'rgba(0,0,0,.75)';
+        ctx.fillRect(0, CANVAS_H / 2 - 96, CANVAS_W, 192);
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 64px monospace';
+        ctx.fillStyle = '#fff';
+        const d = new Date();
+        ctx.fillText(
+            `#${canvasFrame} ${d.toLocaleTimeString('en-GB')}.${String(d.getMilliseconds()).padStart(3, '0')}`,
+            CANVAS_W / 2,
+            CANVAS_H / 2 - 12,
+        );
+        ctx.font = 'bold 36px monospace';
+        ctx.fillStyle = '#6cf';
+        ctx.fillText(`websrt canvas run ${runId}`, CANVAS_W / 2, CANVAS_H / 2 + 56);
+        canvasFrame++;
+        canvasRafId = requestAnimationFrame(paint);
+    };
+    paint();
+    return cv.captureStream(30);
+}
+
+async function startCapture(): Promise<void> {
+    const stream = canvasMode ? startCanvasSource() : await getUserMediaStream();
 
     captureStream = stream;
     previewEl.srcObject = stream;
@@ -157,10 +223,10 @@ async function startCapture(): Promise<void> {
 
     const vTrack = stream.getVideoTracks()[0];
     const settings = vTrack?.getSettings();
-    const w = settings?.width ?? 1280;
-    const h = settings?.height ?? 720;
-    log(`Captured ${w}x${h} (webcam)`, 'info');
-    setStatus('webcam captured - ready to publish');
+    const w = canvasMode ? CANVAS_W : (settings?.width ?? 1280);
+    const h = canvasMode ? CANVAS_H : (settings?.height ?? 720);
+    log(`Captured ${w}x${h} (${canvasMode ? 'canvas test source' : 'webcam'})`, 'info');
+    setStatus(canvasMode ? 'canvas test source - ready to publish' : 'webcam captured - ready to publish');
 
     const fps = +framerateSelect.value;
     const br = +bitrateNum.value;
@@ -177,6 +243,14 @@ function stopCapture(): void {
     if (publishing) stopAll();
     if (captureStream) {
         captureStream.getTracks().forEach((t) => t.stop());
+    }
+    if (canvasRafId) {
+        cancelAnimationFrame(canvasRafId);
+        canvasRafId = 0;
+    }
+    if (canvasEl) {
+        canvasEl.remove();
+        canvasEl = null;
     }
     captureStream = null;
     previewEl.srcObject = null;
@@ -239,8 +313,8 @@ publishBtn.addEventListener('click', async () => {
     // Determine codec
     const vTrack = captureStream.getVideoTracks()[0];
     const settings = vTrack?.getSettings();
-    const width = settings?.width ?? 1280;
-    const height = settings?.height ?? 720;
+    const width = canvasMode ? CANVAS_W : (settings?.width ?? 1280);
+    const height = canvasMode ? CANVAS_H : (settings?.height ?? 720);
     const framerate = +framerateSelect.value;
     const bitrate = +bitrateNum.value;
     const chosenCodec = codecSelect.value === 'auto' ? (detectedCodec ?? 'avc1.640028') : codecSelect.value;
@@ -369,7 +443,12 @@ streamNameInput.addEventListener('change', () => {
 });
 
 populateCodecSelect();
-enumerateMics();
+if (canvasMode) {
+    audioSourceSelect.disabled = true; // no mic path in canvas mode
+    setStatus('canvas test source mode - ready to Capture');
+} else {
+    enumerateMics();
+}
 
 document.addEventListener('visibilitychange', () => {
     if (publishing) framePump.schedule();
