@@ -32,7 +32,10 @@ SRT_LIB="build/libwebsrt/libsrt.a"
 
 case "${1:-}" in
     setup)
-        git submodule update --init deps/libwebsrt
+        # || true: with an unpushed pin the GitHub clone cannot check out
+        # the gitlink SHA and submodule update exits nonzero - the DEV
+        # FALLBACK below is what recovers, so it must stay reachable.
+        git submodule update --init deps/libwebsrt || true
         # DEV FALLBACK: libwebsrt commits may be local-only until the human
         # pushes ~/maxolgi/libwebsrt (master), so the pinned SHA can be
         # missing from the GitHub clone -- fetch it from the local checkout
