@@ -1,12 +1,7 @@
 # srt-wasm-cpp
 
-C++/WASM port of WebSRT's Rust `srt-wasm` player engine — Haivision
-SRT compiled with Emscripten, driven from a web worker, meant to replace the
-Rust engine inside WebSRT's player worker.
-
-All protocol work lives in the srt fork (`~/maxolgi/srt`, branch `websrt`,
-github.com/maxolgi/srt), vendored as the `deps/srt` submodule. Fixes land
-there first; this repo only builds and drives it.
+C++/WASM port of WebSRT's Rust `srt-wasm` player engine —
+SRT compiled with Emscripten, driven from a web worker.
 
 Build:
 
