@@ -52,6 +52,18 @@ buckets should match. Expected noise if a boundary packet releases across
 a second edge in one engine only: a single mismatched bucket with a tiny
 msgs delta.
 
+The `VERDICT:` line above `COMPARE:` is the machine-readable decision on
+the same data (`computeVerdict` + `VERDICT_THRESHOLDS` in page/ab.ts, unit-
+driven by page/ab_smoke.mjs): at most 1 mismatched aligned bucket (the
+expected noise above), full-run msgs/bytes deltas within
+max(32 msgs / 128 kB, 2% of the smaller engine - the measured clean-loopback
+reference was Δ20 msgs / ~20 kB, 0.27%), zero rxLoss/rxDropped, and zero
+outgoing-ring drops on the engine that reports them (null = no ring, n/a).
+Fewer than 3 common interior seconds is NOT-EVALUABLE rather than a pass.
+Known blind spot: a one-second gap also removes its neighbours from the
+bucket comparison (gap propagation) - the msgs-delta threshold is the
+backstop that still catches it.
+
 Runbook:
 
     ./build.sh engine && ./build.sh page && node page/serve.mjs   # :8099

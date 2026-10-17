@@ -58,6 +58,8 @@ pass('ab_worker.js bundle imports in node (both engine glues parse)');
 const mainMod = await import('./bundle/ab.js');
 if (typeof mainMod.mountAbHarness !== 'function') fail('ab.js does not export mountAbHarness');
 if (typeof mainMod.compareVerdict !== 'function') fail('ab.js does not export compareVerdict');
+if (typeof mainMod.computeVerdict !== 'function') fail('ab.js does not export computeVerdict');
+if (typeof mainMod.VERDICT_THRESHOLDS !== 'object') fail('ab.js does not export VERDICT_THRESHOLDS');
 if (typeof document !== 'undefined') fail('node suddenly has a document?');
 pass('ab.js bundle imports in node (document-guarded top level)');
 
@@ -195,40 +197,115 @@ if (finalMsg.rxBytesFinal < finalMsg.bytes) fail(`rxBytes ${finalMsg.rxBytesFina
 if (finalMsg.rttMedianMs === null) fail('no rtt samples');
 pass(`stats totals (loss 0, drop 0, outDropped 0, rtt med ${finalMsg.rttMedianMs.toFixed(2)} ms, rxBytes ${finalMsg.rxBytesFinal})`);
 
-// ---- 4. compareVerdict over synthetic finals (pure function) ---------------
+// ---- 4. compareVerdict + computeVerdict over synthetic finals (pure) -------
 
 {
+    // 5 active seconds -> interior {1,2,3} = 3 common, above the verdict's
+    // minBucketsCompared; msgs/bytes deltas land inside the thresholds
+    // (max(32, 2%) = 32 msgs, max(128 kB, 2%) = 128 kB at this size).
     const mk = (over) => Object.assign({
         engine: 'x', reason: 'stop', durationMs: 30000,
         firstDeliverDelayMs: 150, handshakeDelayMs: 90,
         msgs: 1000, bytes: 1_128_000, sha256: 'a'.repeat(64),
         buckets: [
             { sec: 0, msgs: 100, bytes: 112800, sha256: '0'.repeat(64) },
-            { sec: 1, msgs: 400, bytes: 451200, sha256: '1'.repeat(64) },
-            { sec: 2, msgs: 400, bytes: 451200, sha256: '2'.repeat(64) },
-            { sec: 3, msgs: 100, bytes: 112800, sha256: '3'.repeat(64) },
+            { sec: 1, msgs: 300, bytes: 338400, sha256: '1'.repeat(64) },
+            { sec: 2, msgs: 300, bytes: 338400, sha256: '2'.repeat(64) },
+            { sec: 3, msgs: 200, bytes: 225600, sha256: '3'.repeat(64) },
+            { sec: 4, msgs: 100, bytes: 112800, sha256: '4'.repeat(64) },
         ],
         samples: [], rttMinMs: 0.4, rttMedianMs: 0.5, rttMaxMs: 0.9,
-        lossTotal: 0, dropTotal: 0, rxBytesFinal: 1_200_000,
+        lossTotal: 0, dropTotal: 0, outDropped: null, finalStats: null,
+        rxBytesFinal: 1_200_000,
     }, over);
-    // identical interior buckets (s1, s2): all match
+    const expectStatus = (v, want, tag) => {
+        if (v.status !== want) fail(`${tag}: status ${v.status}, expected ${want}${v.reasons.length ? ` (${v.reasons.join('; ')})` : ''}`);
+    };
+
+    // identical interior buckets (s1-s3): all match, verdict PASS
     const v1 = mainMod.compareVerdict(mk({}), mk({}));
-    if (!v1.includes('hashes EQUAL') || !v1.includes('aligned buckets 2/2')) fail(`verdict identical: ${v1}`);
-    // one interior bucket differs: 1/2 + the mismatch is called out
+    if (!v1.includes('hashes EQUAL') || !v1.includes('aligned buckets 3/3')) fail(`verdict identical: ${v1}`);
+    const clean = mainMod.computeVerdict(mk({}), mk({}));
+    expectStatus(clean, 'PASS', 'verdict clean');
+    if (clean.reasons.length !== 0 || clean.bucketMismatches !== 0 || clean.bucketsCompared !== 3) {
+        fail(`verdict clean data: ${JSON.stringify(clean)}`);
+    }
+    // one interior bucket differs: 2/3 + the mismatch is called out; still
+    // PASS - README calls a single mismatched bucket the expected noise
     const b = mk({});
-    b.buckets[2] = { sec: 2, msgs: 401, bytes: 452328, sha256: 'x'.repeat(64) };
+    b.buckets[2] = { sec: 2, msgs: 301, bytes: 339528, sha256: 'x'.repeat(64) };
     const v2 = mainMod.compareVerdict(mk({}), b);
-    if (!v2.includes('hashes EQUAL') || !v2.includes('aligned buckets 1/2') || !v2.includes('s2')) fail(`verdict mismatch: ${v2}`);
+    if (!v2.includes('hashes EQUAL') || !v2.includes('aligned buckets 2/3') || !v2.includes('s2')) fail(`verdict mismatch: ${v2}`);
+    const one = mainMod.computeVerdict(mk({}), b);
+    expectStatus(one, 'PASS', 'verdict single-bucket noise');
+    if (one.bucketMismatches !== 1 || one.mismatched[0].sec !== 2) fail(`verdict single-bucket data: ${JSON.stringify(one)}`);
     // edges excluded: first/last active seconds never compared
     const c = mk({});
     c.buckets[0].sha256 = 'y'.repeat(64); // s0 is edge for BOTH engines
-    c.buckets[3].sha256 = 'y'.repeat(64);
+    c.buckets[4].sha256 = 'y'.repeat(64);
     const v3 = mainMod.compareVerdict(mk({}), c);
-    if (!v3.includes('aligned buckets 2/2')) fail(`verdict edges: ${v3}`);
+    if (!v3.includes('aligned buckets 3/3')) fail(`verdict edges: ${v3}`);
     // full-run hash difference reported
     const v4 = mainMod.compareVerdict(mk({}), mk({ sha256: 'b'.repeat(64), msgs: 1010 }));
     if (!v4.includes('hashes differ') || !v4.includes('msgs Δ=10')) fail(`verdict differ: ${v4}`);
     pass('compareVerdict (interior alignment, edge exclusion, mismatch localization)');
+
+    // the measured clean-loopback reference deltas (Δ20 msgs / ~20 kB) pass
+    expectStatus(mainMod.computeVerdict(mk({}), mk({ msgs: 1020, bytes: 1_128_000 + 22_560 })), 'PASS', 'verdict reference deltas');
+
+    // two mismatched interior buckets: beyond the 1-bucket noise tolerance
+    const two = mk({});
+    two.buckets[1] = { sec: 1, msgs: 301, bytes: 339528, sha256: 'x'.repeat(64) };
+    two.buckets[3] = { sec: 3, msgs: 201, bytes: 226728, sha256: 'y'.repeat(64) };
+    const twoV = mainMod.computeVerdict(mk({}), two);
+    expectStatus(twoV, 'FAIL', 'verdict bucket breach');
+    if (!twoV.reasons.some((r) => r.includes('mismatched aligned buckets'))) fail(`verdict bucket breach reason: ${twoV.reasons}`);
+
+    // msgs delta beyond max(32, 2%): 33 > 32 here (bytes held equal)
+    const msgsV = mainMod.computeVerdict(mk({}), mk({ msgs: 1033 }));
+    expectStatus(msgsV, 'FAIL', 'verdict msgs breach');
+    if (!msgsV.reasons.some((r) => r.includes('msgs Δ33'))) fail(`verdict msgs breach reason: ${msgsV.reasons}`);
+
+    // bytes delta beyond max(128 kB, 2%): 200 kB > 131.1 kB here
+    const bytesV = mainMod.computeVerdict(mk({}), mk({ bytes: 1_328_000 }));
+    expectStatus(bytesV, 'FAIL', 'verdict bytes breach');
+    if (!bytesV.reasons.some((r) => r.includes('bytes Δ'))) fail(`verdict bytes breach reason: ${bytesV.reasons}`);
+
+    // outgoing-ring drops: nonzero on the reporting engine fails; null
+    // (engine has no ring) is n/a and must not fail
+    const dropsV = mainMod.computeVerdict(mk({ engine: 'rust', outDropped: null }), mk({ engine: 'cpp', outDropped: 3 }));
+    expectStatus(dropsV, 'FAIL', 'verdict outDropped breach');
+    if (!dropsV.reasons.some((r) => r.includes('cpp outDropped=3'))) fail(`verdict outDropped reason: ${dropsV.reasons}`);
+    expectStatus(mainMod.computeVerdict(mk({ engine: 'rust', outDropped: null }), mk({ engine: 'cpp', outDropped: 0 })), 'PASS', 'verdict outDropped n/a');
+
+    // rxLoss / rxDropped totals: the clean-loopback gates, expected zero
+    const lossV = mainMod.computeVerdict(mk({ lossTotal: 5 }), mk({}));
+    expectStatus(lossV, 'FAIL', 'verdict rxLoss breach');
+    if (!lossV.reasons.some((r) => r.includes('rxLoss 5/0'))) fail(`verdict rxLoss reason: ${lossV.reasons}`);
+    const dropV = mainMod.computeVerdict(mk({}), mk({ dropTotal: 2 }));
+    expectStatus(dropV, 'FAIL', 'verdict rxDropped breach');
+    if (!dropV.reasons.some((r) => r.includes('rxDropped 0/2'))) fail(`verdict rxDropped reason: ${dropV.reasons}`);
+
+    // too few common interior seconds to decide: NOT-EVALUABLE, not PASS
+    const short = mk({ buckets: [
+        { sec: 0, msgs: 100, bytes: 112800, sha256: '0'.repeat(64) },
+        { sec: 1, msgs: 700, bytes: 789600, sha256: '1'.repeat(64) },
+        { sec: 2, msgs: 200, bytes: 225600, sha256: '2'.repeat(64) },
+    ] }); // interior {1} -> only 1 second common with the 5-bucket engine
+    const naV = mainMod.computeVerdict(mk({}), short);
+    expectStatus(naV, 'NOT-EVALUABLE', 'verdict too-few-common');
+    if (naV.bucketsCompared !== 1 || !naV.reasons[0].includes('common interior second')) fail(`verdict too-few-common data: ${JSON.stringify(naV)}`);
+    // no interior seconds at all: prose says n/a, verdict NOT-EVALUABLE
+    const none = mk({ buckets: [
+        { sec: 0, msgs: 600, bytes: 676800, sha256: '0'.repeat(64) },
+        { sec: 1, msgs: 400, bytes: 451200, sha256: '1'.repeat(64) },
+    ] });
+    const noneV = mainMod.compareVerdict(mk({}), none);
+    if (!noneV.includes('aligned buckets n/a')) fail(`verdict no-interior prose: ${noneV}`);
+    expectStatus(mainMod.computeVerdict(mk({}), none), 'NOT-EVALUABLE', 'verdict no-interior');
+    // a threshold breach beats NOT-EVALUABLE (never soft-pedal a real fail)
+    expectStatus(mainMod.computeVerdict(mk({}), mk({ buckets: none.buckets, outDropped: 3 })), 'FAIL', 'verdict breach beats n/a');
+    pass('computeVerdict (clean pass, each threshold breach fails, n/a reports as NOT-EVALUABLE)');
 }
 
 pub.free();

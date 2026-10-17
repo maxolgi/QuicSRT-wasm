@@ -11,6 +11,12 @@
 //     the aligned-window view - per-wall-second bucket digests compared over
 //     seconds interior to BOTH engines (each engine's first/last active
 //     second is excluded: session join/leave edges differ by construction).
+//   - VERDICT line: the machine-readable decision on the same data
+//     (computeVerdict: PASS / FAIL / NOT-EVALUABLE) - thresholds encode the
+//     noise the docs call expected (README: "a single mismatched bucket",
+//     small totals deltas), so a run is decided, not eyeballed. Full-run
+//     hash equality is NOT a criterion (both engines join at independent
+//     content offsets, so `hashes differ` is the normal clean outcome).
 //   - "final stats" lines: each engine's FINAL full getStats() snapshot
 //     (all 17 fields, raw values, fixed key order) so every bw/ack/nak/
 //     buffered/belated/tx* field can be diffed Rust-vs-C++ directly, plus
@@ -63,7 +69,15 @@ interface EngineState {
     final: AbFinal | null;
 }
 
-/** Bucket secs with a neighbour on both sides (edges excluded). */
+/** Bucket secs with a neighbour on both sides (edges excluded).
+ *
+ *  CAVEAT (gap propagation): a one-second gap - a second with no delivered
+ *  messages, e.g. a mid-run stall - also removes BOTH of its neighbours
+ *  from this set (each loses a neighbour), so one missing second silently
+ *  drops three seconds from the bucket comparison. The full-run msgs-delta
+ *  threshold in computeVerdict is the remaining backstop: a gap's missing
+ *  messages still show up as a totals delta even though no bucket diff
+ *  covers them. */
 function interiorSecs(buckets: Bucket[]): Set<number> {
     const s = new Set(buckets.map((b) => b.sec));
     const out = new Set<number>();
@@ -71,27 +85,120 @@ function interiorSecs(buckets: Bucket[]): Set<number> {
     return out;
 }
 
-export function compareVerdict(a: AbFinal, b: AbFinal): string {
-    const parts: string[] = [];
-    parts.push(a.sha256 === b.sha256 ? 'hashes EQUAL' : 'hashes differ');
-    parts.push(`msgs Δ=${Math.abs(a.msgs - b.msgs)}`);
-    parts.push(`bytes Δ=${fmtBytes(Math.abs(a.bytes - b.bytes))}`);
+// ---------------------------------------------------------------------------
+// Machine-readable verdict: the thresholds below encode what the docs already
+// call expected noise, so PASS/FAIL is decided by data, not by how lenient
+// the reader of the COMPARE prose feels.
+// ---------------------------------------------------------------------------
+
+export type VerdictStatus = 'PASS' | 'FAIL' | 'NOT-EVALUABLE';
+
+export interface AbVerdict {
+    status: VerdictStatus;
+    /** common interior seconds whose digests were compared. */
+    bucketsCompared: number;
+    /** of those, seconds whose digests differ. */
+    bucketMismatches: number;
+    mismatched: { sec: number; dMsgs: number }[];
+    /** |a.msgs - b.msgs| over the full runs. */
+    msgsDelta: number;
+    /** |a.bytes - b.bytes| over the full runs. */
+    bytesDelta: number;
+    /** per-engine outgoing-ring drops; null = engine has no ring (n/a). */
+    outDroppedA: number | null;
+    outDroppedB: number | null;
+    /** threshold violations when FAIL, or why the byte gate could not run
+     *  when NOT-EVALUABLE; empty on PASS. */
+    reasons: string[];
+}
+
+export const VERDICT_THRESHOLDS = {
+    /** README: expected noise is "a single mismatched bucket" (a boundary
+     *  packet released across a second edge in one engine only). */
+    maxBucketMismatches: 1,
+    /** below this many common interior seconds the byte gate cannot tell
+     *  the one-bucket noise budget from real divergence - NOT-EVALUABLE,
+     *  never a silent PASS. */
+    minBucketsCompared: 3,
+    /** full-run totals deltas: the clean-loopback reference run measured
+     *  Δ20 msgs / ~20 kB (0.27%, 34/34 buckets exact), so allow the larger
+     *  of these floors (short runs) or deltaRel of the smaller engine
+     *  (rate-agnostic: ~7x the observed relative delta). */
+    msgsDeltaFloor: 32,
+    bytesDeltaFloor: 128 * 1024,
+    deltaRel: 0.02,
+    /** header of this file: on a clean loopback "the practical gates are
+     *  the loss/drop totals and the aligned-bucket digests" - both zero. */
+    maxLossTotal: 0,
+    maxDropTotal: 0,
+} as const;
+
+/** Decide the A/B comparison from VERDICT_THRESHOLDS. Any threshold breach
+ *  is FAIL even when the bucket gate itself could not run (too few common
+ *  interior seconds); only a breach-free run that also lacks enough aligned
+ *  seconds is NOT-EVALUABLE. outDropped null means the engine has no
+ *  outgoing ring (rust) and never fails. */
+export function computeVerdict(a: AbFinal, b: AbFinal): AbVerdict {
     const ia = interiorSecs(a.buckets);
     const ib = interiorSecs(b.buckets);
     const common = [...ia].filter((s) => ib.has(s)).sort((x, y) => x - y);
-    if (common.length > 0) {
-        let match = 0;
-        const bad: string[] = [];
-        const ma = new Map(a.buckets.map((x) => [x.sec, x]));
-        const mb = new Map(b.buckets.map((x) => [x.sec, x]));
-        for (const sec of common) {
-            if (ma.get(sec)!.sha256 === mb.get(sec)!.sha256) {
-                match++;
-            } else {
-                bad.push(`s${sec}(Δ${ma.get(sec)!.msgs - mb.get(sec)!.msgs}m)`);
-            }
+    const ma = new Map(a.buckets.map((x) => [x.sec, x]));
+    const mb = new Map(b.buckets.map((x) => [x.sec, x]));
+    const mismatched: { sec: number; dMsgs: number }[] = [];
+    for (const sec of common) {
+        if (ma.get(sec)!.sha256 !== mb.get(sec)!.sha256) {
+            mismatched.push({ sec, dMsgs: ma.get(sec)!.msgs - mb.get(sec)!.msgs });
         }
-        parts.push(`aligned buckets ${match}/${common.length}${bad.length > 0 ? ` mismatch ${bad.join(' ')}` : ''}`);
+    }
+    const msgsDelta = Math.abs(a.msgs - b.msgs);
+    const bytesDelta = Math.abs(a.bytes - b.bytes);
+    const t = VERDICT_THRESHOLDS;
+    const msgsMax = Math.max(t.msgsDeltaFloor, t.deltaRel * Math.min(a.msgs, b.msgs));
+    const bytesMax = Math.max(t.bytesDeltaFloor, t.deltaRel * Math.min(a.bytes, b.bytes));
+    const reasons: string[] = [];
+    if (mismatched.length > t.maxBucketMismatches) {
+        reasons.push(`${mismatched.length} mismatched aligned buckets (> ${t.maxBucketMismatches} expected noise)`);
+    }
+    if (msgsDelta > msgsMax) reasons.push(`msgs Δ${msgsDelta} > ${msgsMax.toFixed(0)}`);
+    if (bytesDelta > bytesMax) reasons.push(`bytes Δ${fmtBytes(bytesDelta)} > ${fmtBytes(bytesMax)}`);
+    if (a.lossTotal > t.maxLossTotal || b.lossTotal > t.maxLossTotal) {
+        reasons.push(`rxLoss ${a.lossTotal}/${b.lossTotal}, expected 0`);
+    }
+    if (a.dropTotal > t.maxDropTotal || b.dropTotal > t.maxDropTotal) {
+        reasons.push(`rxDropped ${a.dropTotal}/${b.dropTotal}, expected 0`);
+    }
+    if (a.outDropped !== null && a.outDropped > 0) reasons.push(`${a.engine} outDropped=${a.outDropped}`);
+    if (b.outDropped !== null && b.outDropped > 0) reasons.push(`${b.engine} outDropped=${b.outDropped}`);
+    let status: VerdictStatus;
+    if (reasons.length > 0) {
+        status = 'FAIL';
+    } else if (common.length < t.minBucketsCompared) {
+        status = 'NOT-EVALUABLE';
+        reasons.push(`only ${common.length} common interior second${common.length === 1 ? '' : 's'} (need >= ${t.minBucketsCompared})`);
+    } else {
+        status = 'PASS';
+    }
+    return {
+        status,
+        bucketsCompared: common.length,
+        bucketMismatches: mismatched.length,
+        mismatched,
+        msgsDelta,
+        bytesDelta,
+        outDroppedA: a.outDropped,
+        outDroppedB: b.outDropped,
+        reasons,
+    };
+}
+
+export function compareVerdict(a: AbFinal, b: AbFinal): string {
+    const v = computeVerdict(a, b);
+    const parts: string[] = [];
+    parts.push(a.sha256 === b.sha256 ? 'hashes EQUAL' : 'hashes differ');
+    parts.push(`msgs Δ=${v.msgsDelta}`);
+    parts.push(`bytes Δ=${fmtBytes(v.bytesDelta)}`);
+    if (v.bucketsCompared > 0) {
+        parts.push(`aligned buckets ${v.bucketsCompared - v.bucketMismatches}/${v.bucketsCompared}${v.mismatched.length > 0 ? ` mismatch ${v.mismatched.map((m) => `s${m.sec}(Δ${m.dMsgs}m)`).join(' ')}` : ''}`);
     } else {
         parts.push('aligned buckets n/a (no common interior seconds)');
     }
@@ -203,7 +310,11 @@ export function mountAbHarness(doc: Document = document): void {
         const a = engines.get('rust')?.final;
         const b = engines.get('cpp')?.final;
         if (a && b) {
-            verdictEl.textContent = `COMPARE: ${compareVerdict(a, b)}`;
+            const v = computeVerdict(a, b);
+            verdictEl.className = v.status === 'FAIL' ? 'verdict-fail' : v.status === 'NOT-EVALUABLE' ? 'verdict-na' : '';
+            verdictEl.textContent =
+                `VERDICT: ${v.status}${v.reasons.length > 0 ? ` — ${v.reasons.join('; ')}` : ''}\n` +
+                `COMPARE: ${compareVerdict(a, b)}`;
             running = false;
             startBtn.disabled = false;
             stopBtn.disabled = true;
@@ -214,6 +325,7 @@ export function mountAbHarness(doc: Document = document): void {
         if (running) return;
         running = true;
         verdictEl.textContent = 'running…';
+        verdictEl.className = '';
         for (const st of engines.values()) st.worker.terminate(); // previous round
         engines.clear();
         finalStatsEl.textContent = '';
