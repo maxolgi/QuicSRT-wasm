@@ -45,7 +45,8 @@ starting each milestone:
   TsEvent / DebugSnapshot / meter / TsMuxer, all with file:line cites, the
   COPY/VIEW table, and the APIs no current consumer uses (surface shrink).
 - `parity-spec.md` — the golden set: 10 ffmpeg streams + 9 crafted
-  corruptions, ~3.7 MB checked in, regen-script contract, and the per-field
+  corruptions, ~4.03 MB checked in (js/fixtures/manifest.sha256 total),
+  regen-script contract, and the per-field
   comparison rules. PCM bit-identity is confirmed achievable (aes3 scales
   are powers of two, no float accumulation). Error-event `text` must be
   canonicalized by stripping the ` (at <path>:<line>)` suffix, harness runs
@@ -113,17 +114,35 @@ Steps (each its own commit, gate before moving on):
 
 1. Build `js/demux_parity.mjs` and run it **Rust vs Rust** (same pkg both
    sides) → verify: green self-test proves the harness before any C++.
+   — ✅ DONE: 2dfb3cb (golden fixtures S1–S10 + gen.sh), 483d2fe (harness,
+   Rust-vs-Rust self-test green).
 2. Port `nal.rs` → verify: parity green on the H.264 golden streams.
+   — ✅ DONE: c9a0dc4 (plus 40e3b05, canonical per-stage exclusion sets).
 3. Port `aes3.rs` → verify: parity green on the 302M golden streams
    (bit-identical floats).
+   — ✅ DONE: 6ea68e4.
 4. Port the `lib.rs` TS core (PAT/PMT/PES reassembly, DebugSnapshot
    counters) → verify: full golden set parity green.
+   — ✅ DONE: e910a23.
 5. Port `meter.rs` → verify: meter parity within the agreed tolerances.
+   — ✅ DONE: 4ecd72f (zero exclusions at `--m5-stage meter`).
 6. Wire exports into the engine module (`build.sh engine` sources), swap
    `page/vendor/demux.ts` import → verify: `./build.sh engine &&
    ./build.sh page`, player plays the local `browsertest`/`ab` stream, the
    vendored debug UI renders against `debugSnapshot()`/`meter_snapshot()`
    unmodified.
+   — ✅ DONE: b62fe29 (tsd_* C ABI + `js/demux_engine.js` wired into the
+   engine module), cdefb9f (wrapper fix: Chrome's TextDecoder rejects
+   SharedArrayBuffer views — found in this step's live gate), e53f926
+   (one-line `demux.ts` import swap + README Known-deltas note). Live-gated
+   on `browsertest` (h264+aac: playback, stats line, PMT/PES) and a
+   self-published `s302m` stream (PCM + meter DSP with sane values). The
+   minimal M3 page mounts no debug panel; DebugSnapshot/meter data was
+   verified over the worker protocol (the same events the vendored viewer
+   hands the debug UI). Known wrinkle for a follow-up: `js/srt_engine.js`
+   and `js/demux_engine.js` each instantiate their own copy of
+   `build/srt_engine.mjs` in the player worker (two 16 MB heaps) —
+   functional, but not the intended single shared instance.
 7. Perf snapshot before/after (same stream, same machine): per-frame
    feed→onPes latency percentiles + GC/long-task count via
    PerformanceObserver → verify: written into the commit message or
