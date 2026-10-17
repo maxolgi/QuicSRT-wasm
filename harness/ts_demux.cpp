@@ -20,13 +20,18 @@
 //     cursor parse and falls back to Raw, where lib.rs reassembles it
 //     (assemble_psi).
 //
-// Staged until the nal/aes3/meter tasks land (the parity harness excludes
-// exactly these): no NAL scanning (pes events carry empty nal tables; the
-// snapshot's nal/ringNal fields are empty), no SMPTE 302M decode (no pcm
-// events; only the meter pid/channel registry rides along, meter.rs
-// 403-417), and the meter DSP returns the documented empty shapes.
+// NAL scanning (nal.rs) is ported in harness/nal.{h,cpp}; finalize_pes
+// scans start codes once per reassembled PES on video PIDs (stream_type
+// 0x1B/0x24) and feeds the event's nal tables, the per-PID nalStats and
+// the ring's per-row NAL summaries exactly like lib.rs:696-729. Staged
+// until the aes3/meter tasks land (the parity harness excludes exactly
+// these): no SMPTE 302M decode (no pcm events; only the meter pid/channel
+// registry rides along, meter.rs 403-417), and the meter DSP returns the
+// documented empty shapes.
 
 #include "ts_demux.h"
+
+#include "nal.h"
 
 #include <algorithm>
 #include <chrono>
@@ -77,6 +82,11 @@ std::string HexPrefix(const uint8_t* p, size_t n) {
 }
 
 std::string Dec(uint64_t n) { return std::to_string(n); }
+
+// lib.rs finalize_pes saturating_add on the u32 NAL counters (719-727).
+uint32_t SatAddU32(uint32_t a, uint32_t b) {
+    return b > UINT32_MAX - a ? UINT32_MAX : a + b;
+}
 std::string Hex2(uint8_t b) {
     static const char* d = "0123456789abcdef";
     return {d[b >> 4], d[b & 0xF]};
@@ -724,8 +734,8 @@ struct TsEvent {
     uint16_t program_num = 0;
     bool random_access = false;
     std::vector<std::string> pmt_format_ids;
-    std::vector<uint32_t> nal_offsets; // empty until the nal port
-    std::vector<uint8_t> nal_types;    // empty until the nal port
+    std::vector<uint32_t> nal_offsets; // flat [off, len, ...] relative to data (video pids)
+    std::vector<uint8_t> nal_types;    // NAL type per NALU (video pids only)
     std::vector<float> samples;        // empty until the aes3 port
 
     static TsEvent Pat(uint16_t program_num, uint16_t pmt_pid) {
@@ -749,7 +759,8 @@ struct TsEvent {
         }
         return e;
     }
-    static TsEvent Pes(uint16_t pid, const PesHeader& h, std::vector<uint8_t> payload, bool ra) {
+    static TsEvent Pes(uint16_t pid, const PesHeader& h, std::vector<uint8_t> payload, bool ra,
+                       std::vector<uint32_t> nal_offsets, std::vector<uint8_t> nal_types) {
         TsEvent e;
         e.kind = 2;
         e.pid = pid;
@@ -757,6 +768,8 @@ struct TsEvent {
         e.dts = h.dts ? static_cast<int64_t>(*h.dts) : -1;
         e.data = std::move(payload);
         e.random_access = ra;
+        e.nal_offsets = std::move(nal_offsets);
+        e.nal_types = std::move(nal_types);
         return e;
     }
     static TsEvent RandomAccess(uint16_t pid) {
@@ -814,7 +827,7 @@ struct PacketEntry {
     int64_t dts = -1;
     uint32_t size = 0;
     bool ra = false;
-    std::vector<uint8_t> nal_summary; // empty until the nal port
+    std::vector<uint8_t> nal_summary; // pes rows: that PES's nalTypes; else empty
     bool tei = false;
     bool pusi = false;
     std::string hex;
@@ -971,8 +984,8 @@ struct TsdSnapshot {
     std::vector<double> pcr_intervals_ms;
     std::vector<double> pcr_jitter_ms;
 
-    std::vector<uint16_t> nal_pids; // empty until the nal port
-    std::vector<double> nal_stats;  // empty until the nal port
+    std::vector<uint16_t> nal_pids;
+    std::vector<double> nal_stats; // flat 9 per pid: I,P,B,IDR,SPS,PPS,SEI,AUD,NonIDR
 
     std::vector<double> error_t;
     std::vector<std::string> error_msg;
@@ -1104,7 +1117,7 @@ struct TsDemuxer {
         return (static_cast<double>(total) * 8.0) / window_secs / 1000000.0;
     }
 
-    // ---- finalize_pes (lib.rs:662-768); nal scan and pcm decode staged out
+    // ---- finalize_pes (lib.rs:662-768); pcm decode staged out
     void FinalizePes(uint16_t pid, const PesHeader& hdr, const std::vector<uint8_t>& payload,
                      bool ra, double t_ms, bool tei, bool pusi,
                      std::vector<std::unique_ptr<TsEvent>>& events) {
@@ -1125,10 +1138,48 @@ struct TsDemuxer {
             if (dts >= 0) stats.last_dts = dts;
         }
 
-        // (nal scan staged out: nal_offsets/nal_types stay empty - exactly
-        // what the exclusion set covers)
+        // NAL classification for video PIDs only, H.264 0x1B / HEVC 0x24
+        // (lib.rs:696-729) - AV1 (OBU syntax) and audio PIDs carry no
+        // Annex-B NAL units. Start codes are scanned ONCE here; offsets +
+        // type codes feed both the TsEvent and the PacketEntry (no re-scan).
+        std::vector<uint32_t> nal_offsets;
+        std::vector<uint8_t> nal_types;
+        const PmtEntry* pmt_e = PmtEntryFor(pid);
+        if (pmt_e != nullptr) {
+            const bool is_hevc = pmt_e->stream_type == 0x24;
+            const bool is_h264 = pmt_e->stream_type == 0x1B;
+            if (is_hevc || is_h264) {
+                nal::NalScan scan = nal::ScanNal(payload.data(), payload.size(), is_hevc);
 
-        events.push_back(std::make_unique<TsEvent>(TsEvent::Pes(pid, hdr, payload, ra)));
+                // Flat offsets array [off0, len0, off1, len1, ...].
+                nal_offsets.reserve(scan.ranges.size() * 2);
+                nal_types = scan.types;
+                for (const auto& [start, end] : scan.ranges) {
+                    nal_offsets.push_back(static_cast<uint32_t>(start));
+                    nal_offsets.push_back(static_cast<uint32_t>(end - start));
+                }
+
+                // Accumulate debug stats from the same scan (no re-scan).
+                const nal::NalStats nstats =
+                    nal::ParseNalStatsFromScan(payload.data(), payload.size(), scan, is_hevc);
+                nal::NalStats& entry = nal_stats[pid];
+                entry.aud = SatAddU32(entry.aud, nstats.aud);
+                entry.sps = SatAddU32(entry.sps, nstats.sps);
+                entry.pps = SatAddU32(entry.pps, nstats.pps);
+                entry.sei = SatAddU32(entry.sei, nstats.sei);
+                entry.idr = SatAddU32(entry.idr, nstats.idr);
+                entry.non_idr_slice =
+                    SatAddU32(entry.non_idr_slice, nstats.non_idr_slice);
+                entry.i_slices = SatAddU32(entry.i_slices, nstats.i_slices);
+                entry.p_slices = SatAddU32(entry.p_slices, nstats.p_slices);
+                entry.b_slices = SatAddU32(entry.b_slices, nstats.b_slices);
+            }
+        }
+
+        // Emit event with the pre-parsed NAL data (nal_types clones for
+        // the event; the original moves into the ring entry below).
+        events.push_back(std::make_unique<TsEvent>(TsEvent::Pes(
+            pid, hdr, payload, ra, std::move(nal_offsets), nal_types)));
 
         if (IsSmpte302mPid(pid) && S302mHasSamples(payload.data(), payload.size())) {
             // The pcm event is staged out (aes3 task); only the meter
@@ -1144,6 +1195,7 @@ struct TsDemuxer {
         e.dts = dts;
         e.size = static_cast<uint32_t>(payload.size());
         e.ra = ra;
+        e.nal_summary = std::move(nal_types);
         e.tei = tei;
         e.pusi = pusi;
         e.hex = HexPrefix(payload.data(), payload.size());
@@ -1513,7 +1565,27 @@ struct TsDemuxer {
             s->pcr_jitter_ms.push_back(p.jitter_ms_ema);
         }
 
-        // nal_stats stays empty (staged out)
+        // nal_stats (lib.rs:1429-1444): video pids ascending, flat 9 per
+        // pid in the order I,P,B,IDR,SPS,PPS,SEI,AUD,NonIDR.
+        {
+            std::vector<uint16_t> nals;
+            nals.reserve(nal_stats.size());
+            for (const auto& kv : nal_stats) nals.push_back(kv.first);
+            std::sort(nals.begin(), nals.end());
+            for (uint16_t pid : nals) {
+                const nal::NalStats& n = nal_stats.at(pid);
+                s->nal_pids.push_back(pid);
+                s->nal_stats.push_back(static_cast<double>(n.i_slices));
+                s->nal_stats.push_back(static_cast<double>(n.p_slices));
+                s->nal_stats.push_back(static_cast<double>(n.b_slices));
+                s->nal_stats.push_back(static_cast<double>(n.idr));
+                s->nal_stats.push_back(static_cast<double>(n.sps));
+                s->nal_stats.push_back(static_cast<double>(n.pps));
+                s->nal_stats.push_back(static_cast<double>(n.sei));
+                s->nal_stats.push_back(static_cast<double>(n.aud));
+                s->nal_stats.push_back(static_cast<double>(n.non_idr_slice));
+            }
+        }
 
         for (const PmtEntry& e : pmt_entries) {
             s->pmt_pids.push_back(e.pid);
@@ -1590,6 +1662,7 @@ struct TsDemuxer {
     std::unordered_map<uint16_t, PidStats> pid_stats;
     std::unordered_map<uint16_t, PcrStats> pcr_stats;
     std::unordered_map<uint16_t, uint8_t> last_cc;
+    std::unordered_map<uint16_t, nal::NalStats> nal_stats;
 
     std::deque<std::pair<double, std::string>> recent_errors;
     std::deque<PacketEntry> packet_ring;

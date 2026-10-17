@@ -36,10 +36,11 @@
 //      after free() returns stale data instead of wasm-bindgen's
 //      "use after free" error - consumers free events last, after
 //      processing (demux.ts:39-43).
-//   2. Staged gaps until the rest of M5 lands: pes events carry empty
-//      nalOffsets/nalTypes, no pcm events exist, and the meter snapshot's
-//      DSP fields hold the documented empty shapes (only pids/
-//      channelCounts/selectedPid/selectedChannel are live).
+//   2. Staged gaps until the rest of M5 lands: no pcm events exist, and
+//      the meter snapshot's DSP fields hold the documented empty shapes
+//      (only pids/channelCounts/selectedPid/selectedChannel are live).
+//      The NAL scanner is ported: pes events on video PIDs carry
+//      populated nalOffsets/nalTypes.
 
 let modulePromise = null;
 let M = null; // the resolved emcc module instance

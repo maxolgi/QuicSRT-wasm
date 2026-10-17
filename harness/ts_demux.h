@@ -24,13 +24,13 @@
 //   tsd_meter_snapshot / tsd_meter_field  meter snapshot (census 1.4)
 //   tsd_set_meter_selection             meter source selection
 //
-// Staged state (M5 steps 2-3 land these; the parity harness excludes
-// exactly these fields until then): NAL scanning is not ported, so pes
-// events carry empty nal tables and the snapshot's nalPids/nalStats/
-// ringNal/ringNalOffsets are empty; SMPTE 302M decode (aes3) is not ported,
-// so no pcm events are emitted - only the meter pid/channel registry rides
+// Staged state (the parity harness excludes exactly these until the
+// remaining M5 steps land): SMPTE 302M decode (aes3) is not ported, so no
+// pcm events are emitted - only the meter pid/channel registry rides
 // along; the meter DSP itself (meter.rs) returns the documented empty
-// shapes.
+// shapes. NAL scanning IS ported (harness/nal.{h,cpp}): pes events on
+// video PIDs (stream_type 0x1B/0x24) carry populated nalOffsets/nalTypes
+// and the snapshot's nalPids/nalStats/ringNal/ringNalOffsets are live.
 
 #ifndef SRTW_TS_DEMUX_H
 #define SRTW_TS_DEMUX_H
@@ -162,7 +162,8 @@ uint16_t tsd_ev_pmt_entry(const TsEvent* e, int j);
 // Per-entry registration-descriptor format ids ("" when absent).
 int tsd_ev_format_id_count(const TsEvent* e);
 const char* tsd_ev_format_id(const TsEvent* e, int j); // NUL-terminated
-// NAL tables: empty until the nal port (staged).
+// NAL tables (pes events on video PIDs only; empty for non-video):
+// nalOffsets is flat [off0, len0, off1, len1, ...] relative to data.
 int tsd_ev_nal_offset_count(const TsEvent* e);
 const uint32_t* tsd_ev_nal_offsets(const TsEvent* e);
 int tsd_ev_nal_type_count(const TsEvent* e);
