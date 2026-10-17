@@ -36,7 +36,7 @@ below; expect ±25% across ffmpeg builds; `manifest.sha256` (§3) is authoritati
 | S4 | `a_aac.ts` | 4 s | 40,796 B | audio-only PMT; bounded PES with `0xFF` stuffing inside payload (byte-exact compare); no NAL (empty `nalOffsets/Types` for non-video PID, lib.rs:696-706); not a 302M pid ⇒ no pcm events (lib.rs:629-635) |
 | S5 | `a302m_16.ts` | 2 s | 501,584 B | 302M path: BSSD detection (lib.rs:629-635, aes3.rs:22-28), kind=5 pcm events, 16-bit 5-byte chunks (aes3.rs:102-111), `streamType=6`, `programNum=channel_count` (lib.rs:406-422), meter `update` per PES (lib.rs:743-753); PTS from PES carried on pcm event |
 | S6 | `a302m_24.ts` | 2 s | 712,896 B | 24-bit 7-byte chunk decode (aes3.rs:77-88); ≥2 s ⇒ LUFS 4-block ring wrapped (meter.rs:10-11) |
-| S7 | `a302m_24_6ch.ts` | 1.5 s | 1,116,720 B | channel_count=6 header (aes3.rs:37,39); pcm `programNum=6`; meter 3 phase pairs, 6 channels (meter.rs:261-299) |
+| S7 | `a302m_24_6ch.ts` | 1.5 s | 1,566,040 B | channel_count=6 header (aes3.rs:37,39); pcm `programNum=6`; meter 3 phase pairs, 6 channels (meter.rs:261-299) |
 | S8 | `v_cbr_pad.ts` | 3 s | 148,896 B | **padding/CBR**: null packets (fork `null.rs` payload ⇒ CC check applies, lib.rs:968-983 + 868-879); AF-only stuffed PCR packets ⇒ `afControlCounts[0b10]` (lib.rs:786-793); PCR interval + jitter EMA on 0x100 (lib.rs:819-833); the "low-bitrate + adaptation-field padding" requirement |
 | S9 | `v_disc.ts` | 3 s | ~110 KB (est) | natural discontinuity_indicator ⇒ CC reset is legitimate, no cc_error (lib.rs:794-798 vs 870-878) |
 | S10 | `v_b_v1.ts` | 3 s | ~110 KB (est) | second program: `-tables_version 1`, PIDs 0x200 / PMT 0x1008 — input half of corruption C8 |
@@ -83,7 +83,7 @@ ffmpeg -y -f lavfi -i testsrc2=size=320x184:rate=25 -t 3 -flags +bitexact -fflag
   -mpegts_start_pid 512 -mpegts_pmt_start_pid 4104 -f mpegts js/fixtures/v_b_v1.ts
 ```
 
-Note S2 duration is 12 s (single `-t 12`, output-side). Total measured+estimated ≈ **3.7 MB**.
+Note S2 duration is 12 s (single `-t 12`, output-side). Total measured+estimated ≈ **4.1 MB** (S7 row and the §3 per-file cap follow the `js/fixtures/gen.sh` @ 2dfb3cb measurements: the verbatim 24-bit S7 command produces 1,566,040 B — the 1,116,720 B originally listed was the 16-bit size).
 
 Explicit non-goals (do not chase): **PCR on a separate PID** — impossible with the ffmpeg
 mpegts muxer (no such option; PCR rides the first video PID `0x100`); PCR tracking is still
@@ -121,8 +121,8 @@ turns a Pmt payload into `Raw` (fork reader.rs:100-107) and silently changes the
 
 ## 3. Fixture storage decision
 
-- **Checked in**: all ten §1 files under `js/fixtures/` (~3.7 MB total; hard budget **6 MB**
-  for the directory, per-file cap 1.2 MB — comfortably under the 20 MB ceiling). No corrupted
+- **Checked in**: all ten §1 files under `js/fixtures/` (~4.1 MB total; hard budget **6 MB**
+  for the directory, per-file cap 1.7 MB — comfortably under the 20 MB ceiling). No corrupted
   variants and no concat files are stored; §2 transforms and §1 concats happen at feed time.
 - **Committed regenerator** `js/fixtures/gen.sh` (spec only — do not write here). Contract:
   1. Emits exactly the ten files with the exact §1 commands (`-y`, cwd = repo root).
@@ -130,7 +130,7 @@ turns a Pmt payload into `Raw` (fork reader.rs:100-107) and silently changes the
      `js/fixtures/manifest.sha256` unless invoked with `--force`.
   3. On success (re)writes `manifest.sha256` (one `<sha256>  <size>  <name>` line per file,
      sorted by name) and **fails** if the directory total exceeds 6 MB or any single file
-     exceeds 1.2 MB.
+     exceeds 1.7 MB.
   4. Fails if any measured size deviates > ±25% from the §1 table (guards option drift).
   5. Prints the first line of `ffmpeg -version` into its output (build provenance).
   6. Exit 0 only when all of the above hold. Byte-stability is per ffmpeg build; the
