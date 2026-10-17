@@ -11,9 +11,11 @@
 // Gate criteria: the mirrored API surface exists, the handshake completes
 // through the poll cycle, the outgoing ring delivered the receiver's
 // handshake/ACK datagrams and dropped none, all 2000 messages arrive
-// byte-identical in order, and getStats() has exactly the 17 StatsMsg keys
+// byte-identical in order, getStats() has exactly the 17 StatsMsg keys
 // worker.ts reads with sane values (rxData == 2000, seeded RTT refined
-// below 300 ms). Exit 0 = pass. srt's pthreads keep node alive, hence the
+// below 300 ms), and one sendMessage publishes through the same outgoing
+// ring as chunked SRT data datagrams with the tx* stats populated.
+// Exit 0 = pass. srt's pthreads keep node alive, hence the
 // explicit exits.
 
 import init, { SrtReceiver, decodeI64Words } from './srt_engine.js';
@@ -63,7 +65,7 @@ const nowUs = () => Number(process.hrtime.bigint() / 1000n);
 await init();
 if (typeof SrtReceiver.newWithLatency !== 'function') fail('SrtReceiver.newWithLatency is not a static function');
 if (typeof SrtReceiver.newWithLatencyAndRtt !== 'function') fail('SrtReceiver.newWithLatencyAndRtt is not a static function');
-for (const m of ['handle_datagram', 'poll', 'isHandshakeComplete', 'isClosed', 'getStats', 'free']) {
+for (const m of ['handle_datagram', 'poll', 'sendMessage', 'isHandshakeComplete', 'isClosed', 'getStats', 'free']) {
     if (typeof SrtReceiver.prototype[m] !== 'function') fail(`SrtReceiver.prototype.${m} is not a function`);
 }
 // diagnostic addition (documented in srt_engine.js, not the mirrored surface)
@@ -79,11 +81,12 @@ pass('init (module load + mirrored SrtReceiver surface)');
     }
     if (probe.isHandshakeComplete() || probe.isClosed()) fail('fresh receiver must be neither connected nor closed');
     if (probe.getDroppedOutgoing() !== 0) fail(`fresh receiver getDroppedOutgoing() = ${probe.getDroppedOutgoing()}, expected 0`);
+    if (probe.sendMessage(new Uint8Array(1)) !== -3) fail('pre-handshake sendMessage must answer -3 (not handshaked)');
     probe.free();
     probe.free(); // idempotent
     if (probe.poll(nowUs()).length !== 0) fail('poll() after free() must return []');
 }
-pass('ctor/free (default 120 ms constructor, zeroed stats, idempotent free)');
+pass('ctor/free (default 120 ms constructor, zeroed stats, sendMessage -3 pre-handshake, idempotent free)');
 
 // ---- the worker.ts flow against the in-wasm publisher --------------------
 
@@ -97,13 +100,16 @@ let closeActions = 0;
 const unknownKinds = new Set();
 let hsAfterFirstDeliver = false;
 
-function processActions(actions) {
+function processActions(actions, capture) {
     for (const a of actions) {
         switch (a.kind) {
             case 0: { // SendDatagram -> worker.ts writeDatagram
                 const d = a.takeData();
                 if (!(d instanceof Uint8Array) || d.length === 0) fail('kind-0 action carries no datagram');
                 if (rx.testPublisherInject(d) !== 0) fail('testPublisherInject rejected a kind-0 datagram');
+                if (capture) {
+                    capture.push(d); // the publisher case's egress observation
+                }
                 outgoing++;
                 break;
             }
@@ -201,6 +207,54 @@ if (s.rxLoss !== 0) fail(`rxLoss = ${s.rxLoss}, expected 0`);
 if (s.rxDropped !== 0) fail(`rxDropped = ${s.rxDropped}, expected 0`);
 if (s.txData !== 0 || s.txBytes !== 0) fail('receive-only session reported tx traffic');
 pass(`stats (17 StatsMsg keys, rxData=${s.rxData}, rttMs=${s.rttMs.toFixed(1)} < ${SEED_RTT_MS}, rxLoss=0, rxDropped=0, int64 decode sign-extends -1000000)`);
+
+// ---- publisher (sendMessage egress) ---------------------------------------
+// The M6 publish direction on the same session: one sendMessage hands the
+// whole buffer to the SRT sender on the accepted socket, and the framed
+// packets ride the outgoing ring like every other datagram - kind-0 actions
+// on the next drain, never the call's return. The negotiated payload here
+// is the full PAYLOAD_SIZE (receiver.h's "effectively 940" readback is the
+// Rust-gateway initiator whose HSv5 MTU field collapses MSS; both loopback
+// endpoints are fork sockets advertising 1128, so MSS stays 1500). Control
+// packets (straggler ACKs) carry bit 31 of the SRT header's first word set
+// (SEQNO_CONTROL, packet.h); only clear-bit datagrams are data packets,
+// each a 16-byte header + one chunk. The drain loop does not pump the
+// publisher, so no ACK returns: SRT counts packets as sent at wire-pack
+// time and holds them unacked in the send buffer (txBuffered > 0).
+
+const PUB_CHUNK = PAYLOAD_SIZE; // the negotiated payload on this session
+const PUB_REMAINDER = 60;
+const PUB_LEN = 2 * PUB_CHUNK + PUB_REMAINDER; // two full chunks + a remainder
+const PUB_SEND_MS = 2000; // send deadline: 0 (the default) accepts ONE chunk
+const SRT_DATA_HDR = 16; // seqno + msgno + timestamp + dest sockid
+
+const pubBuf = new Uint8Array(PUB_LEN);
+for (let i = 0; i < PUB_LEN; i++) {
+    pubBuf[i] = i & 0xff;
+}
+const accepted = rx.sendMessage(pubBuf, PUB_SEND_MS);
+if (accepted !== PUB_LEN) fail(`sendMessage accepted ${accepted}/${PUB_LEN} bytes`);
+
+const egress = [];
+const pubData = () => egress.filter((d) => (d[0] & 0x80) === 0); // skip control
+const pubDeadline = Date.now() + TIMEOUT_MS;
+while (pubData().length < 3) {
+    if (Date.now() > pubDeadline) fail(`publisher egress timeout after ${pubData().length}/3 data datagrams`);
+    processActions(rx.poll(nowUs()), egress);
+    await new Promise((r) => setTimeout(r, 2));
+}
+
+const wantLens = [SRT_DATA_HDR + PUB_CHUNK, SRT_DATA_HDR + PUB_CHUNK, SRT_DATA_HDR + PUB_REMAINDER];
+const gotLens = pubData().map((d) => d.length);
+if (gotLens.join(',') !== wantLens.join(',')) fail(`egress data datagrams [${gotLens}] != SRT header + chunks [${wantLens}]`);
+const reassembled = Buffer.concat(pubData().map((d) => Buffer.from(d.subarray(SRT_DATA_HDR))));
+if (!reassembled.equals(Buffer.from(pubBuf))) fail('reassembled datagram payloads != sent buffer');
+
+const ps = rx.getStats();
+if (!(ps.txData > 0)) fail(`txData = ${ps.txData}, expected > 0`);
+if (!(ps.txBytes >= PUB_LEN)) fail(`txBytes = ${ps.txBytes}, expected >= ${PUB_LEN} payload bytes`); // SRT+UDP+IP headers included: >=, not ==
+if (!(ps.txBuffered > 0)) fail(`txBuffered = ${ps.txBuffered}, expected > 0 unacked (no ACKs emulated)`);
+pass(`publisher (${PUB_LEN} B sendMessage -> ${gotLens.join('/')} egress datagrams, payloads byte-identical in order; txData=${ps.txData}, txBytes=${ps.txBytes} >= payload, txBuffered=${ps.txBuffered} unacked)`);
 
 rx.free();
 pass('free (engine + test publisher teardown)');
