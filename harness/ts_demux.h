@@ -30,9 +30,10 @@
 // nalOffsets/nalTypes and the snapshot's nalPids/nalStats/ringNal/
 // ringNalOffsets are live. SMPTE 302M decode IS ported
 // (harness/aes3.{h,cpp}): BSSD PIDs' pes events are followed by kind-5
-// pcm events (samples as f32, program_num the channel count). Only the
-// meter DSP is staged out: the snapshot returns the documented empty
-// shapes, with just the pid/channel registry and the selection live.
+// pcm events (samples as f32, program_num the channel count). The audio
+// metering DSP IS ported (harness/meter.{h,cpp}): every 302M pcm decode
+// also drives the meter state, and the meter snapshot returns the full
+// 12-field DSP view (mutating snapshot semantics included).
 
 #ifndef SRTW_TS_DEMUX_H
 #define SRTW_TS_DEMUX_H
@@ -182,8 +183,8 @@ void tsd_snapshot_free(TsdSnapshot* s);
 // Fill one field view; 0 ok, -1 unknown field id.
 int tsd_snap_field(const TsdSnapshot* s, int field, TsdFieldView* out);
 
-// Meter snapshot (empty DSP shapes until the meter port; the pid/channel
-// registry and the selection are live). Free with tsd_meter_free.
+// Meter snapshot: the full 12-field DSP view (census 1.4; harness/
+// meter.{h,cpp} behind the registry). Free with tsd_meter_free.
 TsdMeterSnap* tsd_meter_snapshot(TsDemuxer* d);
 void tsd_meter_free(TsdMeterSnap* m);
 int tsd_meter_field(const TsdMeterSnap* m, int field, TsdFieldView* out);

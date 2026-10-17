@@ -36,12 +36,10 @@
 //      after free() returns stale data instead of wasm-bindgen's
 //      "use after free" error - consumers free events last, after
 //      processing (demux.ts:39-43).
-//   2. Staged gap until the meter task of M5 lands: the meter snapshot's
-//      DSP fields hold the documented empty shapes (only
-//      pids/channelCounts/selectedPid/selectedChannel are live). The NAL
-//      scanner and the SMPTE 302M decode are ported: pes events on video
-//      PIDs carry populated nalOffsets/nalTypes, and 302M pes events are
-//      followed by kind-5 pcm events (samples as Float32Array).
+//   2. The meter DSP (harness/meter.{h,cpp}) is live: meter_snapshot()
+//      returns the full 12-field view with wasm-bindgen's mutating
+//      snapshot semantics (latches/resets windows, pushes the phase
+//      ring), exactly like the Rust original.
 
 let modulePromise = null;
 let M = null; // the resolved emcc module instance

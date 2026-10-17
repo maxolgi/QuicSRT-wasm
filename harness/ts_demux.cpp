@@ -26,14 +26,17 @@
 // the ring's per-row NAL summaries exactly like lib.rs:696-729. SMPTE
 // 302M (aes3.rs) is ported in harness/aes3.{h,cpp}; finalize_pes decodes
 // BSSD PIDs' PES payloads to f32 and emits a kind-5 pcm event right
-// after the pes event, exactly like lib.rs:741-753. Staged until the
-// meter task lands (the parity harness excludes exactly these): the
-// meter DSP (meter.rs) returns the documented empty shapes - only the
-// pid/channel registry and the selection are live (meter.rs:403-417).
+// after the pes event, exactly like lib.rs:741-753. The audio metering
+// DSP (meter.rs) is ported in harness/meter.{h,cpp}: finalize_pes drives
+// meter_state.Update with the same samples/channel count/pts as
+// lib.rs:743-753, and tsd_meter_snapshot runs the full MUTATING
+// MeterState::Snapshot (window latch/reset + phase ring push,
+// meter.rs:419-485).
 
 #include "ts_demux.h"
 
 #include "aes3.h"
+#include "meter.h"
 #include "nal.h"
 
 #include <algorithm>
@@ -1167,17 +1170,17 @@ struct TsDemuxer {
 
         if (IsSmpte302mPid(pid)) {
             // lib.rs:741-753: decode right after the pes event; the pcm
-            // event and the meter pid/channel registration ride the same
-            // non-empty decode condition as meter_state.update (a valid
-            // AES3 header plus at least one whole data chunk). Channel
-            // count comes from the per-PES AES3 header (sample rate is
-            // always 48000); the unwrap_or(2) arm is unreachable with
-            // non-empty samples but mirrored anyway.
+            // event and the meter update ride the same non-empty decode
+            // condition (a valid AES3 header plus at least one whole data
+            // chunk), and the meter sees the identical samples burst,
+            // channel count (per-PES AES3 header; the unwrap_or(2) arm is
+            // unreachable with non-empty samples but mirrored anyway) and
+            // pts, BEFORE the samples move into the event.
             std::vector<float> samples = aes3::UnwrapSmpte302mPes(payload.data(), payload.size());
             if (!samples.empty()) {
                 const auto info = aes3::S302mInfoFromHeader(payload.data(), payload.size());
                 const uint8_t channel_count = info ? info->channel_count : 2;
-                MeterUpdate(pid, channel_count);
+                meter_state.Update(pid, samples.data(), samples.size(), channel_count, pts);
                 events.push_back(std::make_unique<TsEvent>(
                     TsEvent::Pcm(pid, pts, channel_count, std::move(samples))));
             }
@@ -1196,15 +1199,6 @@ struct TsDemuxer {
         e.pusi = pusi;
         e.hex = HexPrefix(payload.data(), payload.size());
         PushPacket(std::move(e));
-    }
-
-    // MeterState::update, registry part only (meter.rs:403-417): auto-lock
-    // when unselected/gone, register (or reset on channel-count change).
-    void MeterUpdate(uint16_t pid, uint8_t channel_count) {
-        if (meter_sel_pid == 0 || meter_channels.find(meter_sel_pid) == meter_channels.end()) {
-            meter_sel_pid = pid;
-        }
-        meter_channels[pid] = channel_count;
     }
 
     // ---- handle_packet (lib.rs:770-985)
@@ -1615,31 +1609,25 @@ struct TsDemuxer {
         s->FinishStrings();
     }
 
-    // ---- meter_snapshot: registry + selection live, DSP shapes staged out
+    // ---- meter_snapshot: the full MUTATING MeterState::Snapshot
+    // (meter.rs:419-485) - latches held peak/rms, resets the peak/RMS
+    // windows, pushes phase windows into their ring, reads scope and
+    // spectrum from the selected PID (lowest PID when the selection points
+    // at a gone PID; documented empty shapes when no PID ever metered).
     void BuildMeterSnapshot(TsdMeterSnap* m) {
-        std::vector<uint16_t> pids;
-        pids.reserve(meter_channels.size());
-        for (const auto& kv : meter_channels) pids.push_back(kv.first);
-        std::sort(pids.begin(), pids.end());
-        size_t total_channels = 0;
-        size_t total_pairs = 0;
-        for (uint16_t pid : pids) {
-            const uint8_t ch = meter_channels.at(pid);
-            m->pids.push_back(pid);
-            m->channel_counts.push_back(ch);
-            total_channels += ch;
-            total_pairs += ch / 2;
-        }
-        m->peaks.assign(total_channels, 0.0f);
-        m->rms.assign(total_channels, 0.0f);
-        m->clips.assign(total_channels, 0);
-        m->lufs.assign(total_channels, -70.0f);
-        m->phase.assign(total_pairs, 0.0f);
-        m->scope_l.assign(256, 0.0f);
-        m->scope_r.assign(256, 0.0f);
-        m->spectrum.assign(64, -80.0f);
-        m->selected_pid = meter_sel_pid;
-        m->selected_channel = meter_sel_ch;
+        meter::MeterSnapshot s = meter_state.Snapshot();
+        m->pids = std::move(s.pids);
+        m->channel_counts = std::move(s.channel_counts);
+        m->peaks = std::move(s.peaks);
+        m->rms = std::move(s.rms);
+        m->clips = std::move(s.clips);
+        m->lufs = std::move(s.lufs);
+        m->phase = std::move(s.phase);
+        m->scope_l = std::move(s.scope_l);
+        m->scope_r = std::move(s.scope_r);
+        m->spectrum = std::move(s.spectrum);
+        m->selected_pid = s.selected_pid;
+        m->selected_channel = s.selected_channel;
     }
 
     // ---- state
@@ -1663,9 +1651,8 @@ struct TsDemuxer {
     std::deque<std::pair<double, std::string>> recent_errors;
     std::deque<PacketEntry> packet_ring;
 
-    std::unordered_map<uint16_t, uint8_t> meter_channels;
-    uint16_t meter_sel_pid = 0;
-    uint8_t meter_sel_ch = 0;
+    meter::MeterState meter_state; // one per demuxer, lifetime state
+                                    // (lib.rs:474-475, 502)
 
     std::chrono::steady_clock::time_point start_time;
     std::vector<std::unique_ptr<TsEvent>> pending;
@@ -1849,8 +1836,10 @@ int tsd_meter_field(const TsdMeterSnap* m, int field, TsdFieldView* out) {
 
 void tsd_set_meter_selection(TsDemuxer* d, uint16_t pid, uint8_t channel) {
     if (d == nullptr) return;
-    d->meter_sel_pid = pid;
-    d->meter_sel_ch = channel;
+    // lib.rs:1550-1554: plain field assignment - pid=0 or a gone PID
+    // re-locks to the next 302M PID on update (meter.rs:404-406).
+    d->meter_state.selected_pid = pid;
+    d->meter_state.selected_channel = channel;
 }
 
 } // extern "C"

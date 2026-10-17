@@ -90,13 +90,16 @@ case "${1:-}" in
         # (WebSRT web/src/shared/viewer.ts spawns a module worker), so the
         # emcc output must be importable - classic MODULARIZE scripts are
         # not. The .mjs extension also lets node import it directly.
-        # harness/ts_demux.cpp + harness/nal.cpp + harness/aes3.cpp: the
-        # M5 demux C ABI (incl. the nal.rs scanner and the aes3.rs 302M
-        # unwrapper) alongside the receiver (js/demux_engine.js wraps the
-        # tsd_* exports).
-        em++ harness/receiver.cpp harness/stats_map.cpp harness/ts_demux.cpp harness/nal.cpp harness/aes3.cpp js/engine_shim.c "$LW_LIB" "$SRT_LIB" \
+        # harness/ts_demux.cpp + harness/nal.cpp + harness/aes3.cpp +
+        # harness/meter.cpp: the M5 demux C ABI (incl. the nal.rs scanner,
+        # the aes3.rs 302M unwrapper and the meter.rs DSP) alongside the
+        # receiver (js/demux_engine.js wraps the tsd_* exports).
+        # -ffp-contract=off: no FMA contraction in the meter's f64 chains
+        # (plan-notes/meter-parity.md 2/4 - rms/phase are exact-bit given
+        # mirrored order; there is no -ffast-math anywhere).
+        em++ harness/receiver.cpp harness/stats_map.cpp harness/ts_demux.cpp harness/nal.cpp harness/aes3.cpp harness/meter.cpp js/engine_shim.c "$LW_LIB" "$SRT_LIB" \
             -o build/srt_engine.mjs \
-            -fexceptions -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -Os \
+            -fexceptions -ffp-contract=off -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -Os \
             -sMODULARIZE=1 -sEXPORT_NAME=createSrtEngineModule -sEXPORT_ES6=1 \
             -sEXPORTED_FUNCTIONS=_srtw_init,_srtw_engine_new,_srtw_engine_receiver,_srtw_handle_datagram,_srtw_poll,_srtw_send_message,_srtw_poll_outgoing,_srtw_dropped_outgoing,_srtw_get_stats,_srtw_engine_free,_srtw_test_publisher_start,_srtw_test_publisher_inject,_srtw_test_publisher_poll,_malloc,_free,_tsd_new,_tsd_free,_tsd_feed,_tsd_event_take,_tsd_event_free,_tsd_ev_kind,_tsd_ev_pid,_tsd_ev_pts,_tsd_ev_dts,_tsd_ev_stream_type,_tsd_ev_program_num,_tsd_ev_random_access,_tsd_ev_data_len,_tsd_ev_data,_tsd_ev_text,_tsd_ev_pmt_entry_count,_tsd_ev_pmt_entry,_tsd_ev_format_id_count,_tsd_ev_format_id,_tsd_ev_nal_offset_count,_tsd_ev_nal_offsets,_tsd_ev_nal_type_count,_tsd_ev_nal_types,_tsd_ev_sample_count,_tsd_ev_samples,_tsd_debug_snapshot,_tsd_snapshot_free,_tsd_snap_field,_tsd_meter_snapshot,_tsd_meter_free,_tsd_meter_field,_tsd_set_meter_selection \
             -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU16,HEAPU32,HEAP16,HEAP32,HEAPF32,HEAPF64 \
