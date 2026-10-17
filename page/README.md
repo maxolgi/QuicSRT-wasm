@@ -24,7 +24,13 @@ WebSRT/web/wasm (the built demuxer wasm pkgs - read-only reference).
 
 Known deltas: worker.ts line 1 swaps the Rust glue import for
 `../../js/srt_engine.js` (engine API deltas documented in `js/srt_engine.js`);
-`page/wasm` is a symlink, not vendored sources.
+`page/wasm` is a symlink, not vendored sources. The M6 publisher pair
+`vendor/stream-worker.ts` + `vendor/shared/publish.ts` is vendored @ 854c25c
+as well: stream-worker.ts swaps the engine import the same way and adapts
+`flushTsToSrt()` to the C ABI `sendMessage()` return codes (deltas 1-2
+documented in its header); shared/publish.ts is verbatim. The worker's
+muxer import stays Rust (`../wasm/ts-muxer-wasm`, its bg wasm copied into
+`page/bundle/`) until the M7 C++ muxer lands.
 
 ## M4 A/B harness (`/ab.html`)
 
@@ -82,3 +88,38 @@ byte-identical with the exact full-run digest), and checks the verdict
 computation. `page/build` (symlink -> ../build) exists so node resolves the
 bundles' external `../build/srt_engine.mjs` the way serve.mjs maps `/build/`
 for the browser.
+
+## M6 publisher page (`/publish.html`)
+
+Publishes webcam video+audio from the browser through the vendored
+publisher worker (`page/bundle/publish_worker.js` bundles
+`vendor/stream-worker.ts`: WebCodecs encode + Rust TS mux in the worker, the
+C++ wasm engine behind `js/srt_engine.js` as the SRT layer). The driving
+logic mirrors WebSRT's publish UI (`web/src/stream.tsx` @ 854c25c): `init`
+(WT url + certHash + latency + video/audio encoder config, certHash
+transferred) starts a session, `VideoFrame`s flow as transferred `frame`
+messages from the vendored credit-based `FramePump` (rVFC-paced), mic audio
+rides a transferred `audio-port` from the vendored `AudioGraphManager`,
+`stop` + terminate ends it; `batch`-wrapped `log`/`credit`/`wtReady`/
+`handshakeComplete`/`close`/`wtClosed`/`stats` come back (stats rendered
+with the vendored `formatPubStats`).
+
+- Serve/run: same as the player (`./build.sh page && node page/serve.mjs`),
+  open `http://localhost:8099/publish.html`, Capture (getUserMedia), then
+  Publish. Round-trip check: the viewer link (or the M3 player with the
+  same `?stream=` name) plays it back.
+- URL: the `url:` field, default `wt://127.0.0.1:4435` (the local
+  `websrt-cpp` gateway; `wt://host:port` is shorthand for
+  `https://host:port/wt`). The `publish=` query always comes from the
+  stream-name field (localStorage-persisted random 8-char key, WebSRT's
+  behavior); `?token=` on the page URL passes through. cert-hash.js drives
+  pinning exactly like the player (`window.CERT_HASH` hex -> serverCertificateHashes,
+  null = PKI mode, no pinning).
+- Deltas vs WebSRT's UI at the pin, deliberate: webcam-only getUserMedia
+  capture (no screen capture / tab audio / camera picker - default device),
+  a plain `<pre>` log instead of the preact debug panel, no stream-back
+  player in the page (the M3 player serves that role), the URL input above
+  instead of `?host=`/`?port=`/`window.WT_PORT` resolution, and the
+  pre-bundled `/bundle/publish_worker.js` instead of vite's
+  `new URL('./stream-worker.ts')` (the same delta as the player's
+  `workerUrl`).

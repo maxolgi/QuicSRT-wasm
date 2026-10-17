@@ -1,0 +1,53 @@
+<!doctype html>
+<!-- M6 publisher page: webcam video+audio -> WebCodecs encode + TS mux in
+     the vendored publisher worker (page/bundle/publish_worker.js <- vendored
+     stream-worker.ts: the C++ wasm engine behind js/srt_engine.js as the SRT
+     layer, Rust ts-muxer until M7), over WebTransport to a WebSRT gateway.
+     Driving logic mirrors WebSRT's publish UI (stream.tsx @ 854c25c); deltas
+     are deliberate and listed in page/README.md. Serve with page/serve.mjs
+     (COOP/COEP on every response: the emcc engine uses pthreads). -->
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>srt-wasm-cpp publisher</title>
+    <style>
+        body { font: 14px monospace; margin: 1em; background: #111; color: #ddd; }
+        video { width: 100%; max-width: 960px; background: #000; display: block; }
+        input, button, select { font: inherit; padding: 2px; background: #222; color: #ddd; border: 1px solid #444; }
+        button { margin-right: .5em; padding: .2em 1em; }
+        button:disabled { opacity: .4; }
+        .controls { margin: .5em 0; display: flex; gap: .6em; flex-wrap: wrap; align-items: center; }
+        .controls label { display: flex; align-items: center; gap: 4px; }
+        #status { color: #888; }
+        #pub-stats { white-space: pre-line; }
+        .ok { color: #6f6; } .err { color: #f66; } .info { color: #6cf; }
+        #log { max-width: 960px; white-space: pre-wrap; font-size: 12px; color: #999; max-height: 12em; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <h3>Publish (C++ engine worker)</h3>
+    <video id="preview" width="640" height="360" muted playsinline></video>
+    <div class="controls">
+        <button id="capture-btn">Capture</button>
+        <button id="publish-btn" disabled>Publish</button>
+        <button id="stop-btn" disabled>Stop</button>
+    </div>
+    <div class="controls">
+        <label>url: <input type="text" id="pub-url" size="28" value="wt://127.0.0.1:4435" /></label>
+        <label>stream: <input type="text" id="stream-name" size="10" /></label>
+        <label>latency: <input type="number" id="latency-num" min="20" max="8000" step="10" value="120" />ms</label>
+    </div>
+    <div class="controls">
+        <label>codec: <select id="codec-select"><option value="auto">auto</option></select></label>
+        <label>bitrate: <input type="number" id="bitrate-num" min="0.5" max="50" step="0.5" value="4" />Mbps</label>
+        <label>framerate: <select id="framerate-select"><option>30</option><option>60</option></select></label>
+        <label>audio: <select id="audio-source"><option value="">(none)</option></select></label>
+    </div>
+    <div class="controls"><a id="viewer-link" href="/" target="_blank" style="display:none;"></a></div>
+    <div id="status">idle</div>
+    <div id="pub-stats"></div>
+    <pre id="log"></pre>
+    <script src="/cert-hash.js"></script>
+    <script type="module" src="/bundle/publish.js"></script>
+</body>
+</html>

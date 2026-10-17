@@ -15,9 +15,9 @@ Commands:
     replay   Build the M2 receiver replay gate test (build/replay.js)
     engine   Build the M3 JS engine wrapper module (build/srt_engine.mjs,
              driven through js/srt_engine.js; gate: node js/test_contract.mjs)
-    page     Bundle the M3 player page + M4 A/B harness
-             (page/bundle/{app,worker,ab,ab_worker}.js) with the WebSRT
-             checkout's esbuild; needs ./build.sh engine first
+    page     Bundle the M3 player page + M4 A/B harness + M6 publisher page
+             (page/bundle/{app,worker,ab,ab_worker,publish,publish_worker}.js)
+             with the WebSRT checkout's esbuild; needs ./build.sh engine first
 EOF
 }
 
@@ -128,10 +128,17 @@ case "${1:-}" in
         "$ESBUILD" page/ab_worker.ts --bundle --format=esm \
             --external:../build/srt_engine.mjs --outfile=page/bundle/ab_worker.js
         "$ESBUILD" page/ab.ts --bundle --format=esm --outfile=page/bundle/ab.js
+        # M6 publisher page: the worker bundles the vendored stream-worker.ts
+        # (C++ engine + the Rust ts-muxer until M7 - hence its bg wasm copy
+        # below); same --external treatment for the emcc module.
+        "$ESBUILD" page/vendor/stream-worker.ts --bundle --format=esm \
+            --external:../build/srt_engine.mjs --outfile=page/bundle/publish_worker.js
+        "$ESBUILD" page/publish.ts --bundle --format=esm --outfile=page/bundle/publish.js
         # wasm-bindgen glue resolves its wasm via new URL(..., import.meta.url)
         # -> the bundle's own directory
         cp "$HOME/maxolgi/WebSRT/web/wasm/mpeg2ts-wasm/mpeg2ts_wasm_bg.wasm" page/bundle/
         cp "$HOME/maxolgi/WebSRT/web/wasm/srt-wasm/srt_wasm_bg.wasm" page/bundle/
+        cp "$HOME/maxolgi/WebSRT/web/wasm/ts-muxer-wasm/ts_muxer_wasm_bg.wasm" page/bundle/
         ;;
     -h | --help | help)
         usage
