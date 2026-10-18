@@ -1,9 +1,10 @@
-// Vendored from WebSRT @ 854c25c (web/src/shared/publish.ts) — verbatim,
-// zero code deltas (this pin-note header aside). Both imports are
+// Adapted from the legacy TypeScript player's shared/publish.ts. Code
+// deltas vs that source - this header aside: the localStorage keys are
+// quicsrt-* (hw-mode/debug/debug-width). Both imports are
 // type-only and resolve inside page/vendor/: '../stream-worker' is the
-// vendored publisher worker (its deltas are documented in its header),
-// '../worker' the vendored viewer worker's StatsMsg.
-// Shared helpers extracted from stream.tsx / call.tsx (behavior-identical).
+// publisher worker (its deltas are documented in its header),
+// '../worker' the viewer worker's StatsMsg.
+// Shared helpers originally extracted from stream.tsx / call.tsx (behavior-identical).
 import type { PublishCmd, EncodeStats } from '../stream-worker';
 import type { StatsMsg } from '../worker';
 
@@ -299,7 +300,7 @@ export function attachDebugResizer(opts: {
     onResize?.();
   }
 
-  const savedW = localStorage.getItem('websrt-debug-width');
+  const savedW = localStorage.getItem('quicsrt-debug-width');
   if (savedW) debugRoot.style.width = `${savedW}px`;
 
   let dragging = false;
@@ -327,7 +328,7 @@ export function attachDebugResizer(opts: {
     document.body.classList.remove('resizing');
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
-    localStorage.setItem('websrt-debug-width', String(debugRoot.offsetWidth));
+    localStorage.setItem('quicsrt-debug-width', String(debugRoot.offsetWidth));
   });
 
   return { sync: syncResizerPosition };

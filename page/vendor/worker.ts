@@ -79,7 +79,7 @@ export type WorkerMsg =
   | { type: 'close' }
   | { type: 'batch'; msgs: WorkerMsg[] };
 
-// Set from the `init` command (the main thread reads the 'websrt-debug'
+// Set from the `init` command (the main thread reads the 'quicsrt-debug'
 // localStorage key — workers have no localStorage access).
 let VERBOSE = false;
 

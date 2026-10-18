@@ -411,7 +411,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
         latencyMs,
         decodeInWorker,
         // Workers cannot read localStorage — forward the debug flag.
-        verbose: typeof localStorage !== 'undefined' && localStorage.getItem('websrt-debug') === '1',
+        verbose: typeof localStorage !== 'undefined' && localStorage.getItem('quicsrt-debug') === '1',
       },
       hashBytes ? [hashBytes.buffer as ArrayBuffer] : [],
     );

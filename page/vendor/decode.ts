@@ -584,7 +584,7 @@ type VideoCodec = 'h264' | 'hevc' | 'av1';
 // Persisted hw-accel preference (written by VideoPipeline.setHwMode). Guarded —
 // this module also runs inside workers, which have no localStorage.
 function loadHwMode(): 'prefer-hardware' | 'prefer-software' {
-  return typeof localStorage !== 'undefined' && localStorage.getItem('websrt-hw-mode') === 'prefer-software'
+  return typeof localStorage !== 'undefined' && localStorage.getItem('quicsrt-hw-mode') === 'prefer-software'
     ? 'prefer-software'
     : 'prefer-hardware';
 }
@@ -679,7 +679,7 @@ export class VideoPipeline {
   setHwMode(mode: 'prefer-hardware' | 'prefer-software') {
     if (this.hwMode === mode) return;
     this.hwMode = mode;
-    if (typeof localStorage !== 'undefined') localStorage.setItem('websrt-hw-mode', mode);
+    if (typeof localStorage !== 'undefined') localStorage.setItem('quicsrt-hw-mode', mode);
     this.configured = false;
     this.seenKeyframe = false;
     if (this.decoder) {

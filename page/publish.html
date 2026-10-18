@@ -4,8 +4,8 @@
      stream-worker.ts: the C++ wasm engine behind js/srt_engine.js as the SRT
      layer, the C++ muxer behind js/muxer_engine.js since M7), over
      WebTransport to a QuicSRT gateway.
-     Driving logic mirrors WebSRT's publish UI (stream.tsx @ 854c25c); deltas
-     are deliberate and listed in page/README.md. Served by the QuicSRT-gateway
+     Driving logic per page/README.md; deltas
+     are deliberate and listed there. Served by the QuicSRT-gateway
      gateway from dist/ (./build.sh deploy; COOP/COEP on every response:
      the emcc engine uses pthreads). -->
 <html>

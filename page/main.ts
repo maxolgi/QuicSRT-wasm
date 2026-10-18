@@ -1,4 +1,4 @@
-// Minimal main-thread player: mount the vendored WebSRT player SDK
+// Minimal main-thread player: mount the player SDK
 // (page/vendor/) against the bundled receiver worker (page/bundle/worker.js,
 // which runs the C++ wasm engine via js/srt_engine.js).
 // host/port/stream/token come from ?host=&port=&stream=&token= URL params
@@ -11,19 +11,19 @@ const canvas = document.querySelector('canvas')!;
 const stats = document.querySelector('#stats')!;
 
 // Hw/sw decode preference. The vendored VideoPipeline reads localStorage
-// 'websrt-hw-mode' when it is built (main thread, at mount) and defaults to
+// 'quicsrt-hw-mode' when it is built (main thread, at mount) and defaults to
 // prefer-hardware, which throws OperationError on software-only machines.
 // ?decode=software|hardware seeds the preference before mount; the button
 // above the stats line flips it and reloads (simplest re-apply).
 const decodeParam = new URLSearchParams(location.search).get('decode');
 if (decodeParam === 'software' || decodeParam === 'hardware') {
-    localStorage.setItem('websrt-hw-mode', decodeParam === 'software' ? 'prefer-software' : 'prefer-hardware');
+    localStorage.setItem('quicsrt-hw-mode', decodeParam === 'software' ? 'prefer-software' : 'prefer-hardware');
 }
 const decodeBtn = document.createElement('button');
-decodeBtn.textContent = `decode: ${localStorage.getItem('websrt-hw-mode') === 'prefer-software' ? 'sw' : 'hw'}`;
+decodeBtn.textContent = `decode: ${localStorage.getItem('quicsrt-hw-mode') === 'prefer-software' ? 'sw' : 'hw'}`;
 decodeBtn.addEventListener('click', () => {
-    const sw = localStorage.getItem('websrt-hw-mode') === 'prefer-software';
-    localStorage.setItem('websrt-hw-mode', sw ? 'prefer-hardware' : 'prefer-software');
+    const sw = localStorage.getItem('quicsrt-hw-mode') === 'prefer-software';
+    localStorage.setItem('quicsrt-hw-mode', sw ? 'prefer-hardware' : 'prefer-software');
     location.reload();
 });
 stats.before(decodeBtn);

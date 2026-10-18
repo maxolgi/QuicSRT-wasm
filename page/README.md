@@ -2,8 +2,8 @@
 
 Plays a live QuicSRT stream on a canvas through the C++ wasm engine
 (`build/srt_engine.mjs` behind `js/srt_engine.js`). `page/vendor/` is the
-vendored WebSRT player SDK (byte-identical to WebSRT @ 854c25c except the
-engine-swap lines noted below).
+player SDK (adapted from the legacy TypeScript player: engine-swap lines
+and the quicsrt-* localStorage keys below).
 
 - Serve: `./build.sh engine && ./build.sh page && ./build.sh deploy` — the
   supervised gateway serves `dist/` as its web_root
@@ -15,7 +15,7 @@ engine-swap lines noted below).
   It serves `/cert-hash.js` same-origin (fresh hash each boot);
   `?host=`/`?port=`/`?stream=` override.
 - Decode: `?decode=software|hardware` seeds the hw/sw WebCodecs preference
-  (localStorage `websrt-hw-mode`); the `decode: hw/sw` button above the
+  (localStorage `quicsrt-hw-mode`); the `decode: hw/sw` button above the
   stats line flips it (page reloads). Software-only machines need software.
 - Publish (SRT ingest, any ffmpeg with libsrt; gateway port 9102):
 
@@ -24,19 +24,20 @@ engine-swap lines noted below).
   or WebTransport publish with the libquicsrt-patched ffmpeg (port 4435, hash
   file dance in `QuicSRT-gateway/scripts/QuicSRT-gateway-testpub.sh`).
 
-Known deltas: worker.ts line 1 swaps the Rust glue import for
+Known deltas: worker.ts line 1 imports the C++ engine glue
 `../../js/srt_engine.js` (engine API deltas documented in `js/srt_engine.js`);
-demux.ts line 4 swaps the Rust demux pkg import for `../../js/demux_engine.js`
-(the M5 C++ demuxer behind the same surface; deltas documented in
+demux.ts line 4 imports `../../js/demux_engine.js`
+(the M5 C++ demuxer; deltas documented in
 `js/demux_engine.js`). The M6 publisher pair
-`vendor/stream-worker.ts` + `vendor/shared/publish.ts` is vendored @ 854c25c
-as well: stream-worker.ts swaps the engine import the same way and adapts
+`vendor/stream-worker.ts` + `vendor/shared/publish.ts` adapts the same
+way: stream-worker.ts swaps the engine import the same way and adapts
 `flushTsToSrt()` to the C ABI `sendMessage()` return codes (deltas 1-2
-documented in its header); shared/publish.ts is verbatim. stream-worker.ts
-line 31 swaps the Rust muxer pkg import for `../../js/muxer_engine.js`
-(the M7 C++ muxer behind the same surface; delta 3 in its header, deltas
-in `js/muxer_engine.js`). With M7 the cutover is complete: the player and
-publisher runtime bundles import ZERO Rust wasm pkgs.
+documented in its header); shared/publish.ts only renames the
+localStorage keys to quicsrt-*. stream-worker.ts
+line 31 imports `../../js/muxer_engine.js`
+(the M7 C++ muxer; delta 3 in its header, deltas
+in `js/muxer_engine.js`). The cutover is complete: the player and
+publisher runtime bundles run 100% on the C++ engine module.
 
 ## M5 perf snapshot (step 7, 2026-10-17)
 
@@ -77,8 +78,8 @@ stream would be the honest test (the M5 stretch goal keeps its
 "measured justification required" bar).
 
 The M4 A/B harness that proved engine parity was removed when the
-oracle retired; see git history (and `js/engine_smoke.mjs`, which
-keeps its Rust-free fake-WebTransport engine end-to-end gate).
+bring-up ended; see git history (and `js/engine_smoke.mjs`, which
+keeps its fake-WebTransport engine end-to-end gate).
 
 ## M6 publisher page (`/publish.html`)
 
@@ -87,7 +88,7 @@ publisher worker (`page/bundle/publish_worker.js` bundles
 `vendor/stream-worker.ts`: WebCodecs encode + TS mux in the worker, both
 on the C++ engine module since M7 — the muxer behind `js/muxer_engine.js`,
 the SRT layer behind `js/srt_engine.js` as before). The driving
-logic mirrors WebSRT's publish UI (`web/src/stream.tsx` @ 854c25c): `init`
+logic: `init`
 (WT url + certHash + latency + video/audio encoder config, certHash
 transferred) starts a session, `VideoFrame`s flow as transferred `frame`
 messages from the vendored credit-based `FramePump` (rVFC-paced), mic audio
@@ -113,11 +114,10 @@ with the vendored `formatPubStats`).
 - URL: the `url:` field, default `wt://127.0.0.1:4435` (the local
   `QuicSRT-gateway` gateway; `wt://host:port` is shorthand for
   `https://host:port/wt`). The `publish=` query always comes from the
-  stream-name field (localStorage-persisted random 8-char key, WebSRT's
-  behavior); `?token=` on the page URL passes through. cert-hash.js drives
+  stream-name field (localStorage-persisted random 8-char key); `?token=` on the page URL passes through. cert-hash.js drives
   pinning exactly like the player (`window.CERT_HASH` hex -> serverCertificateHashes,
   null = PKI mode, no pinning).
-- Deltas vs WebSRT's UI at the pin, deliberate: webcam-only getUserMedia
+- UI deltas, deliberate: webcam-only getUserMedia
   capture (no screen capture / tab audio / camera picker - default device),
   a plain `<pre>` log instead of the preact debug panel, no stream-back
   player in the page (the M3 player serves that role), the URL input above
@@ -139,7 +139,7 @@ testpub). Node gates first, all exit 0: `js/test_contract.mjs`,
   145717350 vs 145855757), stats ticking across a 30 s watch with zero
   loss; the session later ran 20 min continuously (140.0 MB rx, loss 0).
   GPU-less box: hardware decode produced no frames silently - the page's
-  own `prefer-software` toggle (`localStorage["websrt-hw-mode"]`) makes it
+  own `prefer-software` toggle (`localStorage["quicsrt-hw-mode"]`) makes it
   decode; player verification used it.
 - Publisher (`/publish.html?source=canvas`, foreground tab): stream
   `m6verA`, canvas 1280x720 H.264 (`avc1.640028`), 30 fps while the tab is

@@ -1,6 +1,6 @@
-// Vendored from WebSRT @ 854c25c (web/src/stream-worker.ts) for the C++
-// engine (PLAN.md M6 step 4). Code deltas vs the pinned source — this
-// pin-note header aside, everything is verbatim:
+// Adapted from the legacy TypeScript player's stream-worker.ts for the
+// C++ engine. Code deltas vs that source — this
+// header aside, everything is verbatim:
 //
 //   1. [engine-swap] import (original line 1):
 //      '../wasm/srt-wasm/srt_wasm.js' -> '../../js/srt_engine.js' (the
@@ -76,7 +76,7 @@ export type PublishMsg =
   | { type: 'stats'; stats: StatsMsg; encode?: EncodeStats }
   | { type: 'batch'; msgs: PublishMsg[] };
 
-const VERBOSE = typeof localStorage !== 'undefined' && localStorage.getItem('websrt-debug') === '1';
+const VERBOSE = typeof localStorage !== 'undefined' && localStorage.getItem('quicsrt-debug') === '1';
 
 let rx: SrtReceiver | null = null;
 let muxer: TsMuxer | null = null;
