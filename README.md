@@ -1,8 +1,7 @@
 # QuicSRT-wasm
 
 C++/WASM player/publisher engine for QuicSRT — SRT compiled with
-Emscripten, driven from a web worker. Renamed from `websrt-wasm-cpp`
-(originally `srt-wasm-cpp`).
+Emscripten, driven from a web worker.
 
 Build:
 
