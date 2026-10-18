@@ -18,6 +18,10 @@ Commands:
     page     Bundle the M3 player page + M4 A/B harness + M6 publisher page
              (page/bundle/{app,worker,ab,ab_worker,publish,publish_worker}.js)
              with the WebSRT checkout's esbuild; needs ./build.sh engine first
+    deploy   Assemble the self-contained dist/ tree the supervised gateway
+             serves as web_root: page html + page/bundle + the engine module
+             at dist/build/ (the bundles' external ../build/srt_engine.mjs);
+             needs ./build.sh page first
 EOF
 }
 
@@ -145,6 +149,23 @@ case "${1:-}" in
         # -> the bundle's own directory
         cp "$HOME/maxolgi/WebSRT/web/wasm/mpeg2ts-wasm/mpeg2ts_wasm_bg.wasm" page/bundle/
         cp "$HOME/maxolgi/WebSRT/web/wasm/srt-wasm/srt_wasm_bg.wasm" page/bundle/
+        ;;
+    deploy)
+        # Self-contained dist/ for the supervised gateway's web_root
+        # (/etc/websrt-cpp/gateway.conf) - replaces the ad-hoc node
+        # serve.mjs flow: the bundles keep ../build/srt_engine.mjs
+        # external, so the engine module + its self-relative .wasm ride
+        # along at dist/build/ to make that import resolve when the
+        # gateway serves dist/ as-is.
+        [ -f build/srt_engine.mjs ] || { echo "build/srt_engine.mjs missing - run ./build.sh engine first" >&2; exit 1; }
+        [ -f page/bundle/app.js ] || { echo "page/bundle/ missing - run ./build.sh page first" >&2; exit 1; }
+        rm -rf dist
+        mkdir -p dist/bundle dist/build
+        cp page/*.html dist/
+        cp page/bundle/* dist/bundle/
+        cp build/srt_engine.mjs build/srt_engine.wasm dist/build/
+        echo "deployed dist/ (gateway web_root):"
+        ls dist/*.html dist/bundle/* dist/build/*
         ;;
     -h | --help | help)
         usage
