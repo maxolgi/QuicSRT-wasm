@@ -17,7 +17,8 @@ Commands:
              driven through js/srt_engine.js; gate: node js/test_contract.mjs)
     page     Bundle the M3 player page + M4 A/B harness + M6 publisher page
              (page/bundle/{app,worker,ab,ab_worker,publish,publish_worker}.js)
-             with the WebSRT checkout's esbuild; needs ./build.sh engine first
+             with the local esbuild (package.json - npm install);
+             needs ./build.sh engine first
     deploy   Assemble the self-contained dist/ tree the supervised gateway
              serves as web_root: page html + page/bundle + the engine module
              at dist/build/ (the bundles' external ../build/srt_engine.mjs);
@@ -113,14 +114,14 @@ case "${1:-}" in
             -Iharness $LW_INC $SRT_INC
         ;;
     page)
-        # esbuild from the WebSRT checkout (no npm install here). The worker
-        # bundles keep ../build/srt_engine.mjs EXTERNAL: the emcc module must
-        # be served as its own file because it spawns its pthread workers by
-        # self-importing srt_engine.mjs (and fetches the .wasm relative to
-        # itself) - the deploy target puts it at dist/build/ for that.
+        # esbuild from the local node_modules (package.json devDependency).
+        # The worker bundles keep ../build/srt_engine.mjs EXTERNAL: the emcc
+        # module must be served as its own file because it spawns its pthread
+        # workers by self-importing srt_engine.mjs (and fetches the .wasm
+        # relative to itself) - the deploy target puts it at dist/build/.
         [ -f build/srt_engine.mjs ] || { echo "build/srt_engine.mjs missing - run ./build.sh engine first" >&2; exit 1; }
-        ESBUILD="$HOME/maxolgi/WebSRT/web/node_modules/.bin/esbuild"
-        [ -x "$ESBUILD" ] || { echo "esbuild not found at $ESBUILD" >&2; exit 1; }
+        ESBUILD="node_modules/.bin/esbuild"
+        [ -x "$ESBUILD" ] || { echo "esbuild not found at $ESBUILD - run: npm install" >&2; exit 1; }
         # demux.ts's ../wasm/mpeg2ts-wasm and ab_worker.ts's
         # ./wasm/srt-wasm/srt_wasm.js (the built wasm pkgs, read-only
         # reference to the WebSRT checkout - same layout depth as web/src)

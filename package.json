@@ -1,0 +1,9 @@
+{
+  "name": "websrt-wasm-cpp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "C++/WASM port of WebSRT's player/publisher engine; esbuild bundles the page/",
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
