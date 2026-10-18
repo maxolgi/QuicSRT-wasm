@@ -5,8 +5,7 @@ with Emscripten, driven from a web worker. Renamed from `srt-wasm-cpp`.
 
 Build:
 
-    ./build.sh setup   # init deps/libwebsrt + nested deps/srt (falls back to
-                       # the local libwebsrt clone for unpushed pins)
+    ./build.sh setup   # init deps/libwebsrt + nested deps/srt
     ./build.sh lib     # build libwebsrt's receiver-only flavor + the srt
                        # static lib with Emscripten
 

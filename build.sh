@@ -6,8 +6,7 @@ usage() {
 Usage: ./build.sh <command>
 
 Commands:
-    setup    One-time: init deps/libwebsrt + its nested deps/srt (falls back
-             to the local libwebsrt clone for unpushed pins)
+    setup    One-time: init deps/libwebsrt + its nested deps/srt
     lib      Configure + build libwebsrt's receiver-only flavor + the srt
              static lib with Emscripten (WEBSRT_ENABLE_WT=OFF,
              WEBSRT_RECEIVER_ONLY=ON -> websrt::receiver-core)
@@ -35,25 +34,11 @@ SRT_LIB="build/libwebsrt/libsrt.a"
 
 case "${1:-}" in
     setup)
-        # || true: with an unpushed pin the GitHub clone cannot check out
-        # the gitlink SHA and submodule update exits nonzero - the DEV
-        # FALLBACK below is what recovers, so it must stay reachable.
-        git submodule update --init deps/libwebsrt || true
-        # DEV FALLBACK: libwebsrt commits may be local-only until the human
-        # pushes ~/maxolgi/WebSRT-cpp/libwebsrt (master), so the pinned SHA can be
-        # missing from the GitHub clone -- fetch it from the local checkout
-        # and check it out (goes dormant once every pin is pushed).
-        pinned="$(git ls-tree HEAD deps/libwebsrt | awk '{print $3}')"
-        if ! git -C deps/libwebsrt cat-file -e "${pinned}^{commit}" 2>/dev/null; then
-            git -C deps/libwebsrt fetch "$HOME/maxolgi/WebSRT-cpp/libwebsrt" master 2>/dev/null || true
-            if [ "$(git -C deps/libwebsrt rev-parse HEAD)" != "$pinned" ]; then
-                git -C deps/libwebsrt checkout "$pinned"
-            fi
-        fi
         # The nested srt pin rides the libwebsrt commit checked out above.
         # Run inside the submodule, NOT --recursive: libwebsrt also carries
         # deps/lsquic (WT-only) and srt its test submodules - neither builds
         # here and they would just be cloned.
+        git submodule update --init deps/libwebsrt
         git -C deps/libwebsrt submodule update --init deps/srt
         ;;
     lib)

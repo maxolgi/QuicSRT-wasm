@@ -7,8 +7,7 @@ gates now pin the port to the committed golden baselines, standalone.
 
 ## Build/test map
 
-- `./build.sh setup` — init deps/libwebsrt + nested deps/srt (falls back
-  to the local libwebsrt clone for unpushed pins)
+- `./build.sh setup` — init deps/libwebsrt + nested deps/srt
 - `./build.sh lib` — libwebsrt receiver-only flavor + the srt static lib
   with Emscripten
 - `./build.sh engine` — build/srt_engine.mjs + .wasm (the one module both
