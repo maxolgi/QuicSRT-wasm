@@ -1,9 +1,8 @@
 // srt_engine.js - the M3 JS engine wrapper around the emcc module
 // (build/srt_engine.mjs: harness/receiver.cpp + js/engine_shim.c).
 //
-// It mirrors the exported shape of the Rust engine it replaces
-// (WebSRT crates/srt-wasm/src/lib.rs -> wasm-bindgen srt_wasm.js) so WebSRT's
-// player worker (web/src/worker.ts) can be vendored with ONE import swap:
+// It exports the wasm-bindgen-style surface the vendored player worker
+// consumes with ONE import swap:
 //
 //   import init, { SrtReceiver } from './srt_engine.js';
 //

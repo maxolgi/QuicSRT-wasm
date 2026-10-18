@@ -59,13 +59,13 @@ jobs:
           if-no-files-found: error
 
   # Publish a GitHub Release for every successful master build, like
-  # QuicSRT-gateway's ci (and WebSRT's build.yml before it): master
+  # QuicSRT-gateway's ci: master
   # push -> dev-<short_sha> marked latest (must NOT be a prerelease -
   # GitHub ignores make_latest on pre-releases, losing the Latest badge
   # and /releases/latest); v* tag push -> stable release tagged
   # <version>. The dist tree rides as quicsrt-wasm-dist.zip with its
-  # contents at the zip root (unzip -d <web_root>), the same shape as
-  # WebSRT's websrt-web-dist.zip asset the gateway fetches.
+  # contents at the zip root (unzip -d <web_root>) - the asset the
+  # gateway fetches.
   release:
     needs: build-dist
     if: >-

@@ -1,9 +1,7 @@
-// The M5 SMPTE 302M (AES3-in-MPEG-2-TS) unwrapper: WebSRT
-// crates/mpeg2ts-wasm/src/aes3.rs (the oracle) ported 1:1 - extracts PCM
-// samples from AES3 frames packed in PES payloads, matching FFmpeg's s302m
-// byte layout. Internal helper of the demux port (ts_demux.cpp calls it
-// from finalize_pes exactly where lib.rs:741-753 unwraps): the Rust module
-// is crate-internal API, NOT wasm ABI, so nothing here is exported through
+// The M5 SMPTE 302M (AES3-in-MPEG-2-TS) unwrapper: extracts PCM samples
+// from AES3 frames packed in PES payloads, matching FFmpeg's s302m byte
+// layout. Internal helper of the demux port (ts_demux.cpp calls it from
+// finalize_pes): nothing here is exported through
 // the tsd_* C ABI (abi-census.md header note). Decode quirks are documented
 // in aes3.cpp.
 

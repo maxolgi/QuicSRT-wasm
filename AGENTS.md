@@ -37,10 +37,9 @@ gates now pin the port to the committed golden baselines, standalone.
   gates the .ts files only); the golden baselines live alongside and are
   validated by their provenance field + the `--record` drift diff;
   `js/fixtures/gen.sh` regenerates the .ts fixtures — recovery only,
-  ffmpeg lines are verbatim from the spec, the committed manifest is
-  authoritative
-- Parity contracts live in `plan-notes/` (parity-spec, abi-census,
-  meter-parity, publisher-surface, debug-consumers). PLAN.md is retired;
+  the committed manifest is authoritative
+- The bring-up parity specs (plan-notes/) are retired with the oracle;
+  recoverable from git history. PLAN.md likewise:
   `git show a654b0e^:PLAN.md` for the historical log.
 
 ## Live testing

@@ -1,5 +1,5 @@
 // M3 contract gate: drives the JS wrapper (js/srt_engine.js) exactly the
-// way WebSRT's player worker (web/src/worker.ts) drives the Rust engine -
+// way the player worker drives the engine -
 // construct via newWithLatencyAndRtt, pump handle_datagram/poll, process
 // the action list, read getStats - against the in-wasm synthetic publisher
 // (js/engine_shim.c, the replay_test.cpp caller pattern). JS stays in the

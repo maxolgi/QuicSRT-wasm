@@ -137,7 +137,7 @@ extern "C" {
 
 typedef struct srtw_engine srtw_engine;
 
-#define TST_PAYLOAD_SIZE 1128 // 6 x 188-byte TS packets - the WebSRT constant
+#define TST_PAYLOAD_SIZE 1128 // 6 x 188-byte TS packets - the quicsrt:// protocol constant
 #define TST_NUM_MESSAGES 2000
 #define TST_LATENCY_MS 120 // the contract test constructs the engine at 120 ms
 #define TST_TIMEOUT_MS 5000 // fail fast instead of hanging

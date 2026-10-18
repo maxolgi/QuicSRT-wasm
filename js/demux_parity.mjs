@@ -1,8 +1,7 @@
 // M5 demux regression gate: the C++ demux (harness/ts_demux via
 // build/srt_engine.mjs) vs the committed GOLDEN BASELINE
-// js/fixtures/demux.baseline.json. plan-notes/parity-spec.md is the
-// historical contract the corpus and §-canonicalization below still
-// follow.
+// js/fixtures/demux.baseline.json. The corpus and §-canonicalization
+// below follow the recorded contract.
 //
 // Provenance: the baseline was recorded from the C++ build at a commit
 // where it was proven byte-identical to the Rust oracle over this exact
@@ -96,9 +95,9 @@ const SNAPSHOT_FIELDS = [
 ];
 const WALL_CLOCK_FIELDS = ['ringT', 'errorT', 'bitratesMbps']; // §4.2 excluded
 
-// MeterSnapshot §4.3 (plan-notes/meter-parity.md §2, adopted verbatim):
+// MeterSnapshot §4.3 (adopted verbatim):
 // all 12 fields digested raw - the baseline pins exact f32 bits, the
-// oracle-era ±1e-6 dB tolerance only made sense across implementations.
+// cross-implementation ±1e-6 dB tolerance is retired.
 const METER_FIELDS = [
     'pids', 'channelCounts', 'peaks', 'clips', 'rms', 'lufs', 'phase',
     'scopeL', 'scopeR', 'spectrum', 'selectedPid', 'selectedChannel',

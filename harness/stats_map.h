@@ -1,14 +1,9 @@
-// SrtwStats: the stats half of the M2 receiver C ABI. Mirrors the Rust
-// srt-wasm SrtStats (WebSRT crates/srt-wasm/src/lib.rs) field for field -
-// the JS wrapper's StatsMsg (web/src/worker.ts ~517) is built on exactly
-// these names - and maps each onto the forked-srt SRT_TRACEBSTATS
-// (CBytePerfMon) snapshot taken with srt_bstats(sock, ..., clear=0).
+// SrtwStats: the stats half of the M2 receiver C ABI. Field-for-field the
+// shape the JS wrapper's StatsMsg (js/srt_engine.js) is built on, mapped
+// onto the forked-srt SRT_TRACEBSTATS (CBytePerfMon) snapshot taken with
+// srt_bstats(sock, ..., clear=0).
 //
-// The srt-protocol SocketStatistics the Rust engine wraps documents this
-// same correspondence in its own doc comments (srt-rs srt-protocol
-// src/statistics/mod.rs); the table follows it:
-//
-//   Rust SrtStats        TRACEBSTATS            Notes
+//   SrtStats              TRACEBSTATS            Notes
 //   -----------------    -------------------    --------------------------------
 //   elapsed_ms           msTimeStamp            ms since the connection epoch
 //   rx_data              pktRecvTotal           data pkts received incl. retrans
@@ -33,10 +28,9 @@
 //     instead (identical while srtw_get_stats keeps passing clear=0, which it
 //     does by construction).
 //
-// The Rust getStats() bandwidth also maxes in a tx-side rate derived from
-// tx_bytes deltas - that derivation is Rust-side-only and moot for the
-// receive-only player socket, so bandwidth_bps carries the C API's
-// mbpsBandwidth estimate alone.
+// bandwidth_bps carries the C API's mbpsBandwidth estimate alone - no
+// tx-side rate maxed in, which would be moot for the receive-only
+// player socket.
 
 #ifndef SRTW_STATS_MAP_H
 #define SRTW_STATS_MAP_H

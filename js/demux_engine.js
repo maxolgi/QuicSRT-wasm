@@ -1,15 +1,13 @@
 // demux_engine.js - the M5 JS wrapper around the emcc module's demux C ABI
 // (build/srt_engine.mjs: harness/ts_demux.{h,cpp}).
 //
-// It mirrors the exported shape of the Rust demuxer it replaces (WebSRT
-// crates/mpeg2ts-wasm/src/lib.rs -> wasm-bindgen mpeg2ts_wasm.js) so
-// WebSRT's demux wrapper (web/src/demux.ts) can be vendored with ONE
-// import swap, exactly like js/srt_engine.js mirrors the engine:
+// It exports the wasm-bindgen-style surface page/vendor/demux.ts
+// consumes with ONE import swap, exactly like js/srt_engine.js mirrors
+// the engine:
 //
 //   import init, { TsDemuxer } from './demux_engine.js';
 //
-// Mirrored surface (names in/out, plan-notes/abi-census.md is the
-// contract):
+// Mirrored surface (names in/out; the C ABI is the contract):
 //
 //   default export init()                     async, idempotent module load
 //   class TsDemuxer

@@ -1,7 +1,6 @@
 // M7 muxer regression gate: the C++ muxer (harness/ts_muxer via
 // build/srt_engine.mjs) vs the committed GOLDEN BASELINE
-// js/fixtures/muxer.baseline.json. Contracts plan-notes/abi-census.md §2
-// + plan-notes/publisher-surface.md §2 (historical).
+// js/fixtures/muxer.baseline.json (the C ABI is the contract).
 //
 // Provenance: the baseline was recorded from the C++ build at a commit
 // where it was proven byte-identical to the Rust oracle over this exact

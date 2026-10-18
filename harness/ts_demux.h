@@ -1,13 +1,10 @@
-// The M5 demux C ABI: the mpeg2ts-wasm oracle surface (WebSRT
-// crates/mpeg2ts-wasm/src/lib.rs - the fork's TS stack underneath, cargo
-// checkout mpeg2ts 9a1efaf) ported to C++ behind extern "C", exported from
-// the same emcc module as the receiver (build/srt_engine.mjs). The JS
-// wrapper (js/demux_engine.js) mirrors the wasm-bindgen naming exactly -
+// The M5 demux C ABI: an MPEG-2 TS demuxer behind extern "C", exported
+// from the same emcc module as the receiver (build/srt_engine.mjs). The
+// JS wrapper (js/demux_engine.js) keeps the wasm-bindgen-style naming -
 // property getters for kind/pid/pts/dts/stream_type/data/text/program_num/
 // randomAccess/nalOffsets/nalTypes/samples and every snapshot field,
 // pmtEntries()/pmtFormatIds() as METHODS, meter_snapshot snake_case - so
-// page/vendor/demux.ts is a one-line import swap (plan-notes/abi-census.md
-// is the port contract).
+// page/vendor/demux.ts is a one-line import swap.
 //
 //   tsd_new / tsd_free                  demuxer lifecycle
 //   tsd_feed                            append TS bytes, parse 188-B
@@ -190,7 +187,7 @@ void tsd_meter_free(TsdMeterSnap* m);
 int tsd_meter_field(const TsdMeterSnap* m, int field, TsdFieldView* out);
 
 // Select the meter source PID + channel; pid=0 or a gone PID re-locks to
-// the next 302M PID on update (meter.rs:404-406).
+// the next 302M PID on update.
 void tsd_set_meter_selection(TsDemuxer* d, uint16_t pid, uint8_t channel);
 
 #ifdef __cplusplus

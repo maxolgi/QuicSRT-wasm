@@ -1,8 +1,6 @@
-// The M7 muxer port: crates/ts-muxer-wasm/src/lib.rs (shim) over native
-// crates/ts-muxer/src/lib.rs + aes3.rs, behind the tsm_* C ABI of
-// ts_muxer.h. The Rust IS the spec - every quirk is mirrored, not
-// fixed (native line cites below). Byte-identical poll() output vs the
-// oracle is the gate (js/muxer_parity.mjs, zero exclusions).
+// The M7 muxer port: a TS muxer behind the tsm_* C ABI of ts_muxer.h.
+// Every quirk is deliberate and pinned by the gate (js/muxer_parity.mjs,
+// zero exclusions).
 //
 // Port notes, keyed to the native source:
 //   - us_to_90k = (us.max(0.0) * 9.0 / 100.0) as u64 (n:586-588):

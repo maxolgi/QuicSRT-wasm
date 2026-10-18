@@ -1,5 +1,5 @@
-// The M5 NAL scanner: crates/mpeg2ts-wasm/src/nal.rs (the oracle) ported
-// 1:1. The Rust IS the spec - quirks mirrored, not fixed:
+// The M5 NAL scanner. Every quirk below is deliberate and pinned by the
+// js/demux_parity.mjs golden-baseline gate:
 //
 //   - No emulation-prevention stripping (nal.rs:6-10): slice headers are
 //     read raw past the NAL header (H.264 from byte 1, HEVC from byte 2);

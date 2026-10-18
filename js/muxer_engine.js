@@ -1,15 +1,12 @@
 // muxer_engine.js - the M7 JS wrapper around the emcc module's muxer C
 // ABI (build/srt_engine.mjs: harness/ts_muxer.{h,cpp}).
 //
-// It mirrors the exported shape of the Rust muxer it replaces (WebSRT
-// crates/ts-muxer-wasm/src/lib.rs -> wasm-bindgen ts_muxer_wasm.js) so
-// WebSRT's stream worker can be vendored with ONE import swap at the
-// M7 cutover, exactly like js/demux_engine.js mirrors the demuxer:
+// It exports the wasm-bindgen-style surface the vendored stream worker
+// consumes, exactly like js/demux_engine.js mirrors the demuxer:
 //
 //   import init, { TsMuxer } from './muxer_engine.js';
 //
-// Mirrored surface (names in/out, plan-notes/abi-census.md §2 is the
-// contract):
+// Mirrored surface (names in/out; the C ABI is the contract):
 //
 //   default export init()                     async, idempotent module load
 //   class TsMuxer

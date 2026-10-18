@@ -1,17 +1,14 @@
-// The M5 audio metering DSP: WebSRT crates/mpeg2ts-wasm/src/meter.rs (the
-// oracle) ported 1:1 - per-channel peak/RMS/clip windows, simplified
+// The M5 audio metering DSP: per-channel peak/RMS/clip windows, simplified
 // BS.1770 K-weighted LUFS (per-channel, 4x100 ms block ring, no true
 // gating), stereo-pair phase correlation (12-window ring), and a
 // hand-rolled 1024-point FFT spectrum of the selected channel. Internal
-// helper of the demux port: ts_demux.cpp calls Update() from finalize_pes
-// exactly where lib.rs:743-753 drives meter_state.update, Snapshot() where
-// lib.rs:1532-1548 builds the MeterSnapshotView, and assigns
-// selected_pid/selected_channel where lib.rs:1550-1554 does. The Rust
-// module is crate-internal API, NOT wasm ABI, so nothing here crosses the
-// tsd_* C ABI (abi-census.md header note). Numeric quirks are documented
-// in meter.cpp; the per-field float parity policy (exact-bit /
-// order-sensitive / tolerant buckets and the -ffp-contract=off build
-// condition) lives in plan-notes/meter-parity.md.
+// helper of the demux port: ts_demux.cpp calls Update() from finalize_pes,
+// Snapshot() when a meter view is requested, and assigns
+// selected_pid/selected_channel on selection changes. Nothing here crosses
+// the tsd_* C ABI. Numeric quirks are documented in meter.cpp; the
+// per-field float parity policy (exact-bit / order-sensitive / tolerant
+// buckets and the -ffp-contract=off build condition) is pinned by the
+// js/demux_parity.mjs regression gate.
 
 #ifndef SRTW_METER_H
 #define SRTW_METER_H
@@ -32,7 +29,7 @@ constexpr uint32_t CLIP_RUN = 3; // full-scale samples that constitute a clip
 constexpr size_t FFT_SIZE = 1024;
 constexpr size_t SCOPE_SIZE = 256;
 
-// Per-channel meter (meter.rs:30-163): peak/RMS window, clip counter, and
+// Per-channel meter: peak/RMS window, clip counter, and
 // the K-weighting chain feeding the LUFS block ring. All filtering runs in
 // f64; results narrow to f32 exactly at the Rms()/Lufs() returns.
 struct ChannelMeter {
@@ -54,13 +51,13 @@ struct ChannelMeter {
     double lufs_block_sum = 0.0;
     size_t lufs_filled_blocks = 0; // saturates at LUFS_BLOCKS
 
-    void Update(float sample); // meter.rs:92-137
-    float Lufs() const;        // meter.rs:139-150
-    float Rms() const;         // meter.rs:152-157
-    void ResetWindow();        // meter.rs:159-163 (snapshot side effect)
+    void Update(float sample);
+    float Lufs() const;
+    float Rms() const;
+    void ResetWindow(); // snapshot side effect
 };
 
-// One stereo-pair phase window + its 12-slot display ring (meter.rs:166-245).
+// One stereo-pair phase window + its 12-slot display ring.
 struct PhaseState {
     double sum_lr = 0.0;
     double sum_ll = 0.0;
@@ -73,12 +70,12 @@ struct PhaseState {
     size_t ring_filled = 0;
     float held = 0.0f;
 
-    void Update(float l, float r);         // meter.rs:201-208
-    void PushWindow();                     // meter.rs:220-232 (snapshot side effect)
-    float DisplayCorrelation() const;      // meter.rs:235-244
+    void Update(float l, float r);
+    void PushWindow(); // snapshot side effect
+    float DisplayCorrelation() const;
 };
 
-// One 302M PID's meter set (meter.rs:247-368).
+// One 302M PID's meter set.
 struct PidMeter {
     uint8_t channel_count = 0;
     std::vector<ChannelMeter> channels;
@@ -91,16 +88,16 @@ struct PidMeter {
     std::vector<float> fft_ring; // FFT_SIZE, f32 samples of sel ch
     size_t fft_idx = 0;
 
-    explicit PidMeter(uint8_t channel_count); // meter.rs:261-277
-    // meter.rs:279-316. selected/sel_ch gate the scope/FFT rings only -
+    explicit PidMeter(uint8_t channel_count);
+    // selected/sel_ch gate the scope/FFT rings only -
     // rings are never cleared on selection change (stale samples persist).
     void Update(const float* samples, size_t len, int64_t pts, bool selected,
                 uint8_t sel_ch);
-    std::pair<std::vector<float>, std::vector<float>> Scope() const; // meter.rs:318-327
-    std::vector<float> Spectrum() const;                            // meter.rs:329-368
+    std::pair<std::vector<float>, std::vector<float>> Scope() const;
+    std::vector<float> Spectrum() const;
 };
 
-// The flattened snapshot (meter.rs:371-384): per-PID-concatenated channel
+// The flattened snapshot: per-PID-concatenated channel
 // arrays, scope/spectrum of the selected PID only.
 struct MeterSnapshot {
     std::vector<uint16_t> pids;
@@ -119,13 +116,13 @@ struct MeterSnapshot {
 
 class MeterState {
 public:
-    // meter.rs:403-417: auto-lock the first (or re-lock a gone) selection,
+    // Auto-lock the first (or re-lock a gone) selection,
     // create the PID's meter, re-create it from scratch when its channel
     // count changes.
     void Update(uint16_t pid, const float* samples, size_t len, uint8_t channel_count,
                 int64_t pts);
-    // meter.rs:419-485 - MUTATING (latches held peaks/RMS, resets windows,
-    // pushes phase windows), exactly like the Rust original.
+    // MUTATING (latches held peaks/RMS, resets windows,
+    // pushes phase windows).
     MeterSnapshot Snapshot();
 
     uint16_t selected_pid = 0;

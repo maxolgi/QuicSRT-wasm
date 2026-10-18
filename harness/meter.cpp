@@ -1,10 +1,10 @@
-// The M5 audio metering DSP: crates/mpeg2ts-wasm/src/meter.rs (the oracle)
-// ported 1:1. The Rust IS the spec - every numeric quirk is mirrored, not
-// fixed (float parity policy: plan-notes/meter-parity.md):
+// The M5 audio metering DSP. Every numeric quirk below is deliberate and
+// pinned by the js/demux_parity.mjs golden-baseline gate (float parity
+// policy: exact-bit / order-sensitive / tolerant):
 //
-//   - f32/f64 split (meter-parity.md 1/2): PCM arrives as f32 (already
+//   - f32/f64 split: PCM arrives as f32 (already
 //     bit-gated by the aes3 port); every accumulation widens to f64 at the
-//     same points as Rust (`sample as f64`, phase l/r widening, fft_ring
+//     same points (`sample as f64`, phase l/r widening, fft_ring
 //     `as f64 * w`), and results narrow to f32 exactly at the four
 //     documented cast points (Lufs/Rms returns, DisplayCorrelation return,
 //     band dB). peaks/scope stay pure f32 copies; rms/phase are
@@ -13,24 +13,24 @@
 //     are compared tolerant at abs 1e-6 dB with the -70/-80 sentinels as
 //     literals.
 //   - K-weighting coefficients are f64 decimal literals copied verbatim
-//     (meter.rs:18-28) - never recomputed from the analog prototype; both
+//     - never recomputed from the analog prototype; both
 //     sign conventions carry their own signs into `... - B1*y1 - B2*y2`.
 //     Direct Form I, per-sample state, never reset (only PidMeter
 //     re-creation on a channel-count change resets anything).
 //   - Clip runs count ONCE when the run reaches CLIP_RUN=3 (`>= 0.999f`
-//     is an f32 compare in Rust - the literal infers f32 from abs_s; the
-//     C++ must spell the f suffix or the compare widens to f64).
-//   - LUFS (meter.rs:108-150) is NOT BS.1770 proper: per-channel, 4x100 ms
+//     must be an f32 compare - spell the f suffix or the compare widens
+//     to f64).
+//   - LUFS is NOT BS.1770 proper: per-channel, 4x100 ms
 //     non-overlapping block ring averaged as one window, dividing by
 //     FILLED samples (filled_blocks*4800 + block_samples), floor -70.0 on
 //     zero fill or mean_sq < 1e-12. The ring sums fold in slot order
 //     starting at 0.0, then add the open partial block.
-//   - Phase display (meter.rs:235-244): the 12 ring slots re-sum in index
+//   - Phase display: the 12 ring slots re-sum in index
 //     order (independent 0.0-start folds), `lr / (sqrt(ll*rr) + 1e-12)`,
 //     clamp [-1,1], cast f32; held re-emitted when the ring is empty or
 //     ll/rr <= 0. Windows are pushed by Snapshot() only when non-empty -
 //     empty windows neither age nor alter the ring.
-//   - Snapshot() is part of the state machine (meter.rs:419-485): per
+//   - Snapshot() is part of the state machine: per
 //     channel with samples it latches held_peak/held_rms and resets the
 //     window; per pair with samples it pushes the window into the ring.
 //     PIDs iterate ascending; scope/spectrum come from the selected PID
@@ -40,14 +40,14 @@
 //     partner is `sel_ch ^ 1` (same channel when ch==1); rings are NEVER
 //     cleared on selection change - stale samples persist until
 //     overwritten. Scope() reads the rotation oldest->newest, pure copy.
-//   - Spectrum (meter.rs:329-368): de-rotate the 1024 ring to
+//   - Spectrum: de-rotate the 1024 ring to
 //     chronological order, symmetric Hann window with denominator
 //     FFT_SIZE-1 = 1023 (NOT the periodic variant), then the hand-rolled
 //     iterative radix-2 DIT FFT below (verbatim port, ~45 lines: no
 //     library, no twiddle tables - a table or crate FFT changes the error
 //     profile), magnitudes 0..512, 64 log-spaced bands over bins 1..511
 //     with edges[0]=1, `edges[b] = max(edges[b-1]+1, floor(512^(b/64)))`
-//     (the Rust loop runs b=1..=64 and then forces edges[64]=512), per
+//     (the loop runs b=1..=64 and then forces edges[64]=512), per
 //     band `hi = min(max(edges[b+1], lo+1), 512)`, max-magnitude bin ->
 //     `20*log10(max_mag + 1e-12)` as f32, default -80.0.
 
@@ -59,8 +59,8 @@
 namespace meter {
 namespace {
 
-// meter.rs:18-28 - verbatim f64 decimal literals (clang and rustc both
-// round decimal literals correctly to the same f64 bits).
+// Verbatim f64 decimal literals (clang rounds decimal literals
+// correctly to f64 bits).
 constexpr double KW1_A0 = 1.53512485958697;
 constexpr double KW1_A1 = -2.69169618940638;
 constexpr double KW1_A2 = 1.19839281085285;

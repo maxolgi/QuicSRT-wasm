@@ -1,5 +1,5 @@
-// The M5 SMPTE 302M unwrapper: crates/mpeg2ts-wasm/src/aes3.rs (the
-// oracle) ported 1:1. The Rust IS the spec - quirks mirrored, not fixed:
+// The M5 SMPTE 302M unwrapper. Every quirk below is deliberate and
+// pinned by the js/demux_parity.mjs golden-baseline gate:
 //
 //   - LSB-first bit layout (aes3.rs:59-116, ffmpeg s302m): every data byte
 //     is bit-reversed before integer assembly, and the survivor masks are

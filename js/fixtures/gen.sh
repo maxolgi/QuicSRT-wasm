@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regenerator for the M5 demux-parity golden fixtures. The ten ffmpeg
-# command lines below are VERBATIM from plan-notes/parity-spec.md
-# section 1, and the guards/manifest follow its section 3 storage
-# contract. Output is deterministic per ffmpeg build; the committed
-# manifest.sha256 is authoritative across builds - regeneration exists
-# for recovery, not reproduction.
+# Regenerator for the M5 demux-parity golden fixtures. The guards/
+# manifest follow the recorded storage contract (deterministic corpus,
+# sha/size gates). Output is deterministic per ffmpeg build; the
+# committed manifest.sha256 is authoritative across builds -
+# regeneration exists for recovery, not reproduction.
 #
 # Known deviation (spec table self-contradiction, reported upstream):
 # a302m_24_6ch.ts - section 1 lists 1,116,720 B, but that is the 16-bit

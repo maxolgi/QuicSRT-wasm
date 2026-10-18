@@ -1,37 +1,34 @@
-// The M5 demux port: crates/mpeg2ts-wasm/src/lib.rs (the oracle) on top of
-// the mpeg2ts fork's TS stack (cargo checkout 9a1efaf), behind the tsd_* C
-// ABI of ts_demux.h. The Rust IS the spec - every quirk is mirrored, not
-// fixed:
+// The M5 demux port: an MPEG-2 TS demuxer behind the tsd_* C ABI of
+// ts_demux.h. Every quirk below is deliberate and pinned by the
+// js/demux_parity.mjs golden-baseline gate:
 //
-//   - Byte-exact parse cursor. The fork's reads go through nested
-//     io::Take bounds over one shared cursor, so a parse error leaves the
-//     cursor mid-packet wherever the reads died (a misaligned feed
-//     therefore errors PER BYTE on the sync check - parity-spec C6). The
-//     port models takes as absolute region ends on one cursor, which
+//   - Byte-exact parse cursor. Reads go through nested
+//     io::Take-style bounds over one shared cursor, so a parse error
+//     leaves the cursor mid-packet wherever the reads died (a
+//     misaligned feed therefore errors PER BYTE on the sync check).
+//     Takes are modeled as absolute region ends on one cursor, which
 //     reproduces the consumption exactly.
-//   - Error text. lib.rs formats "ts parse: {e:?}" and the fork's Display
-//     is "{Kind}: {reason} (at <file>:<line>)". The C++ texts carry the
-//     "ts parse: {Kind}: {reason}" prefix verbatim; the (machine-specific)
-//     location suffix is omitted, and the parity harness strips it from
-//     the Rust side (parity-spec 4.1), so canonicalized texts match.
-//   - Pid-kind dispatch (fork reader.rs): PAT registers PMT pids, PMT
+//   - Error text. Canonical form is "ts parse: {Kind}: {reason}" - the
+//     machine-specific location suffix is omitted, and the parity
+//     harness canonicalizes it away on the baseline side, so texts
+//     match.
+//   - Pid-kind dispatch: PAT registers PMT pids, PMT
 //     registers ES pids as PES, everything unknown is Raw (never an
 //     error); a PMT whose section spans packets fails the in-packet
-//     cursor parse and falls back to Raw, where lib.rs reassembles it
+//     cursor parse and falls back to Raw, where it is reassembled
 //     (assemble_psi).
 //
-// NAL scanning (nal.rs) is ported in harness/nal.{h,cpp}; finalize_pes
+// NAL scanning lives in harness/nal.{h,cpp}; finalize_pes
 // scans start codes once per reassembled PES on video PIDs (stream_type
 // 0x1B/0x24) and feeds the event's nal tables, the per-PID nalStats and
-// the ring's per-row NAL summaries exactly like lib.rs:696-729. SMPTE
-// 302M (aes3.rs) is ported in harness/aes3.{h,cpp}; finalize_pes decodes
+// the ring's per-row NAL summaries. SMPTE
+// 302M lives in harness/aes3.{h,cpp}; finalize_pes decodes
 // BSSD PIDs' PES payloads to f32 and emits a kind-5 pcm event right
-// after the pes event, exactly like lib.rs:741-753. The audio metering
-// DSP (meter.rs) is ported in harness/meter.{h,cpp}: finalize_pes drives
-// meter_state.Update with the same samples/channel count/pts as
-// lib.rs:743-753, and tsd_meter_snapshot runs the full MUTATING
-// MeterState::Snapshot (window latch/reset + phase ring push,
-// meter.rs:419-485).
+// after the pes event. The audio metering
+// DSP lives in harness/meter.{h,cpp}: finalize_pes drives
+// meter_state.Update with the decoded samples/channel count/pts, and
+// tsd_meter_snapshot runs the full MUTATING
+// MeterState::Snapshot (window latch/reset + phase ring push).
 
 #include "ts_demux.h"
 

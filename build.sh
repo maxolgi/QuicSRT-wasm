@@ -54,18 +54,18 @@ case "${1:-}" in
     engine)
         source ~/emsdk/emsdk_env.sh
         # EXPORT_ES6: the player worker loads this as an ES module
-        # (WebSRT web/src/shared/viewer.ts spawns a module worker), so the
+        # (the viewer worker is a module worker), so the
         # emcc output must be importable - classic MODULARIZE scripts are
         # not. The .mjs extension also lets node import it directly.
         # harness/ts_demux.cpp + harness/nal.cpp + harness/aes3.cpp +
-        # harness/meter.cpp: the M5 demux C ABI (incl. the nal.rs scanner,
-        # the aes3.rs 302M unwrapper and the meter.rs DSP) alongside the
+        # harness/meter.cpp: the M5 demux C ABI (incl. the NAL scanner,
+        # the 302M unwrapper and the meter DSP) alongside the
         # receiver (js/demux_engine.js wraps the tsd_* exports).
-        # harness/ts_muxer.cpp: the M7 muxer C ABI (ts-muxer-wasm oracle
-        # surface; js/muxer_engine.js wraps the tsm_* exports).
+        # harness/ts_muxer.cpp: the M7 muxer C ABI (js/muxer_engine.js
+        # wraps the tsm_* exports).
         # -ffp-contract=off: no FMA contraction in the meter's f64 chains
-        # (plan-notes/meter-parity.md 2/4 - rms/phase are exact-bit given
-        # mirrored order; there is no -ffast-math anywhere).
+        # (rms/phase are exact-bit given mirrored order; there is no
+        # -ffast-math anywhere).
         em++ harness/receiver.cpp harness/stats_map.cpp harness/ts_demux.cpp harness/nal.cpp harness/aes3.cpp harness/meter.cpp harness/ts_muxer.cpp js/engine_shim.c "$LW_LIB" "$SRT_LIB" \
             -o build/srt_engine.mjs \
             -fexceptions -ffp-contract=off -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -Os \
