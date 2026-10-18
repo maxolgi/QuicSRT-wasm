@@ -11,8 +11,6 @@ Commands:
     lib      Configure + build libwebsrt's receiver-only flavor + the srt
              static lib with Emscripten (WEBSRT_ENABLE_WT=OFF,
              WEBSRT_RECEIVER_ONLY=ON -> websrt::receiver-core)
-    harness  Build the M1 loopback gate test (build/loopback.js)
-    replay   Build the M2 receiver replay gate test (build/replay.js)
     engine   Build the M3 JS engine wrapper module (build/srt_engine.mjs,
              driven through js/srt_engine.js; gate: node js/test_contract.mjs)
     page     Bundle the M3 player page + M6 publisher page
@@ -67,27 +65,6 @@ case "${1:-}" in
             -DCMAKE_C_FLAGS="-pthread -fexceptions" \
             -DCMAKE_CXX_FLAGS="-pthread -fexceptions"
         cmake --build build/libwebsrt -j "$(nproc)" --target websrt_receiver_core
-        ;;
-    harness)
-        source ~/emsdk/emsdk_env.sh
-        # CJS marker: the emcc output uses require(); without this the
-        # nearest package.json (~: "type": "module", the desktop app's)
-        # makes node reject it as ESM. The .mjs engine output is exempt
-        # by extension.
-        printf '{"type":"commonjs"}\n' > build/package.json
-        em++ harness/loopback.cpp "$SRT_LIB" -o build/loopback.js \
-            -fexceptions -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -Os \
-            -DSRT_ENABLE_VIRTUAL_TRANSPORT \
-            $SRT_INC
-        ;;
-    replay)
-        source ~/emsdk/emsdk_env.sh
-        printf '{"type":"commonjs"}\n' > build/package.json
-        em++ harness/replay_test.cpp harness/receiver.cpp harness/stats_map.cpp "$LW_LIB" "$SRT_LIB" \
-            -o build/replay.js \
-            -fexceptions -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -Os \
-            -DSRT_ENABLE_VIRTUAL_TRANSPORT \
-            -Iharness $LW_INC $SRT_INC
         ;;
     engine)
         source ~/emsdk/emsdk_env.sh
