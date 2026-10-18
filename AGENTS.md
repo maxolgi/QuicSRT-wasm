@@ -1,8 +1,9 @@
 # websrt-wasm-cpp agent notes
 
 C++/WASM port of WebSRT's player/publisher engine — ReceiverCore + TS
-demux/mux behind one emscripten module, proven byte-parity vs the Rust
-pkgs by `js/*_parity.mjs`.
+demux/mux behind one emscripten module. Byte-parity vs the Rust pkgs
+was proven at the recorded baseline commits; the `js/*_parity.mjs`
+gates now pin the port to the committed golden baselines, standalone.
 
 ## Build/test map
 
@@ -21,15 +22,19 @@ pkgs by `js/*_parity.mjs`.
 - Node gates (exit 0 = pass):
   - `node js/test_contract.mjs` — engine wrapper contract (the in-wasm
     synthetic publisher)
-  - `node js/demux_parity.mjs [--cpp --m5-stage meter]` — demux parity vs
-    the Rust mpeg2ts-wasm pkg
-  - `node js/muxer_parity.mjs [--cpp]` — muxer parity vs the Rust
-    ts-muxer-wasm oracle
+  - `node js/demux_parity.mjs` — demux regression gate vs the committed
+    golden baseline js/fixtures/demux.baseline.json (`--record` re-records
+    and prints the drift diff)
+  - `node js/muxer_parity.mjs` — muxer regression gate vs
+    js/fixtures/muxer.baseline.json (`--record` likewise)
   - `node page/ab_smoke.mjs` — static A/B harness gate (needs
     `./build.sh page`)
-- Fixtures: `js/fixtures/` (sha/size-gated by manifest.sha256);
-  `js/fixtures/gen.sh` regenerates — recovery only, ffmpeg lines are
-  verbatim from the spec, the committed manifest is authoritative
+- Fixtures: `js/fixtures/` (sha/size-gated by manifest.sha256, which
+  gates the .ts files only); the golden baselines live alongside and are
+  validated by their provenance field + the `--record` drift diff;
+  `js/fixtures/gen.sh` regenerates the .ts fixtures — recovery only,
+  ffmpeg lines are verbatim from the spec, the committed manifest is
+  authoritative
 - Parity contracts live in `plan-notes/` (parity-spec, abi-census,
   meter-parity, publisher-surface, debug-consumers). PLAN.md is retired;
   `git show a654b0e^:PLAN.md` for the historical log.

@@ -1,11 +1,18 @@
-// M7 muxer parity gate: Rust oracle vs itself (phase 1) and vs the C++
-// port (phase 2, --cpp). PLAN.md M7 step 1, contract
-// plan-notes/abi-census.md §2 + plan-notes/publisher-surface.md §2.
+// M7 muxer regression gate: the C++ muxer (harness/ts_muxer via
+// build/srt_engine.mjs) vs the committed GOLDEN BASELINE
+// js/fixtures/muxer.baseline.json. Contracts plan-notes/abi-census.md §2
+// + plan-notes/publisher-surface.md §2 (historical).
+//
+// Provenance: the baseline was recorded from the C++ build at a commit
+// where it was proven byte-identical to the Rust oracle over this exact
+// corpus (see the provenance field in the baseline file). The recorded
+// digests carry that parity forward - this gate is self-contained, it
+// loads nothing outside the repo.
 //
 // 1. Deterministic SYNTHETIC elementary inputs - no ffmpeg, no wall
-//    clock, no randomness beyond a seeded xorshift32 - drive TWO TsMuxer
-//    instances through identical scripted op timelines covering every
-//    public method of the 12-method ABI (census §2): setVideoCodec,
+//    clock, no randomness beyond a seeded xorshift32 - drive ONE TsMuxer
+//    per scenario through a scripted op timeline covering every public
+//    method of the 12-method ABI (census §2): setVideoCodec,
 //    setVideoEnabled, setAudioCodec, addAudioPid, setSparseEnabled,
 //    setSparseThreshold, push_video, push_audio, push_pcm, push_pcm_pid,
 //    poll, constructor. Corpus shape (scenarios V*/P*/S*/Q*/E*/C*):
@@ -36,32 +43,32 @@
 // 2. THE DRAIN SEQUENCE IS THE UNIT OF COMPARISON: poll() is scripted
 //    at fixed points - after pushes, between config-only ops (empty
 //    polls), twice in a row - and every poll's output must be
-//    byte-identical: sha256 + length per drain, exact-byte first-diff
-//    + hex window on divergence, plus structural checks on both sides
-//    (whole 188-B packets, 0x47 sync every 188 bytes). Integer/byte
-//    logic only - NO tolerance, none ever.
-// 3. Per-scenario structural asserts on side A prove the corpus still
-//    exercises what it claims (PAT/PMT iff keyframe video or the PCM
-//    PSI rules, PCR pid placement, suppression actually suppressing) -
-//    guards against corpus drift, not a second comparator.
-// 4. Negative control: side B fed one mutated op (a flipped keyframe
-//    flag) MUST diverge, with the §-style first-divergence report.
+//    byte-identical to the recorded per-drain sha256 (plus structural
+//    checks: whole 188-B packets, 0x47 sync every 188 bytes), with
+//    per-scenario totals (bytes, packets, concatenated sha256) gating
+//    the drain list for sanity. Integer/byte logic only - NO tolerance,
+//    none ever.
+// 3. Per-scenario structural asserts prove the corpus still exercises
+//    what it claims (PAT/PMT iff keyframe video or the PCM PSI rules,
+//    PCR pid placement, suppression actually suppressing) - guards
+//    against corpus drift, not a second comparator.
+// 4. Negative control: an honest scenario run compared against its own
+//    baseline entry with ONE drain digest tampered in memory MUST
+//    diverge, with a first-divergence style report.
 //
 // Usage:
-//   node js/muxer_parity.mjs [--cpp]
+//   node js/muxer_parity.mjs           gate vs the baseline (exit 0 = pass)
+//   node js/muxer_parity.mjs --record  re-record the baseline from the
+//                                      current build and print the drift
+//                                      vs the existing file
 //
-// --cpp runs side B on the C++ port (build/srt_engine.mjs via
-// js/muxer_engine.js) instead of a second Rust instance; default stays
-// Rust-vs-Rust. The comparator is shared - zero exclusions in both
-// modes, byte-identical is the only pass condition.
-//
-// Exit 0 = pass; on divergence exit 1 with scenario id, op index, poll
-// index, byte offset and both values.
+// Exit 0 = pass; on divergence exit 1 with scenario id and the first
+// mismatching count or drain digest.
 
-import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { baselineProvenance, currentCommit, loadBaseline, reportBaselineDrift, writeBaseline } from './baseline.js';
 
 function fail(msg) {
     console.error(`muxer_parity: FAIL: ${msg}`);
@@ -74,17 +81,13 @@ function pass(msg) {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-let CPP = false; // --cpp: side B runs the C++ port instead of Rust
+const RECORD = process.argv.slice(2).includes('--record');
 for (const arg of process.argv.slice(2)) {
-    if (arg === '--cpp') {
-        CPP = true;
-    } else {
-        fail(`unknown argument "${arg}" (usage: node js/muxer_parity.mjs [--cpp])`);
-    }
+    if (arg !== '--record') fail(`unknown argument "${arg}" (usage: node js/muxer_parity.mjs [--record])`);
 }
 
 const COUNTS = {
-    scenarios: 0, ops: 0, polls: 0, emptyPolls: 0, pollBytes: 0, packets: 0,
+    scenarios: 0, baselineCases: 0, ops: 0, polls: 0, emptyPolls: 0, pollBytes: 0, packets: 0,
 };
 
 // ---- deterministic synthetic inputs (no ffmpeg, no wall clock) -------------------
@@ -201,7 +204,6 @@ function ck(scenario, what, cond, detail = '') {
 class ParityError extends Error {}
 
 const sha = (u8) => createHash('sha256').update(u8).digest('hex');
-const hex = (u8, from, to) => Array.from(u8.subarray(from, to), (b) => b.toString(16).padStart(2, '0')).join(' ');
 
 function checkStructure(scenario, opIdx, pollIdx, out) {
     if (out.length % PKT !== 0) {
@@ -214,85 +216,72 @@ function checkStructure(scenario, opIdx, pollIdx, out) {
     }
 }
 
-function comparePoll(scenario, opIdx, pollIdx, a, b) {
-    if (a.length !== b.length) {
-        // length differs: still scan the common prefix for a byte report
-        const n = Math.min(a.length, b.length);
-        let off = 0;
-        while (off < n && a[off] === b[off]) off++;
-        throw new ParityError(
-            `${scenario}: op #${opIdx} (poll #${pollIdx}): length A=${a.length} B=${b.length}` +
-            byteDiff(a, b, off),
-        );
+// First mismatch only: scenario id, the count or drain index, run value
+// vs baseline (64-hex digests print as 16 chars + ellipsis).
+function assertBaseline(scenarioId, r, entry) {
+    for (const f of ['ops', 'drains', 'bytes', 'packets']) {
+        if (r[f] !== entry[f]) {
+            throw new ParityError(`${scenarioId}: ${f}: run ${r[f]} vs baseline ${entry[f]}`);
+        }
     }
-    const sa = sha(a);
-    const sb = sha(b);
-    if (sa !== sb) {
-        let off = 0;
-        while (off < a.length && a[off] === b[off]) off++;
-        throw new ParityError(
-            `${scenario}: op #${opIdx} (poll #${pollIdx}): sha256 A=${sa} B=${sb}` +
-            byteDiff(a, b, off),
-        );
+    for (let i = 0; i < r.drainDigests.length; i++) {
+        if (r.drainDigests[i] !== entry.drainDigests[i]) {
+            throw new ParityError(`${scenarioId}: drain #${i}: sha256 run ${r.drainDigests[i].slice(0, 16)}… vs baseline ${entry.drainDigests[i].slice(0, 16)}…`);
+        }
     }
-}
-
-// First differing byte + a ±16-byte hex window on both sides (the muxer
-// is integer/byte logic: any single-bit divergence is a real bug, never
-// a format artifact).
-function byteDiff(a, b, off) {
-    if (off >= a.length || off >= b.length || a[off] === b[off]) {
-        return `; no common-prefix byte diff (first divergence is the length)`;
+    if (r.totalSha256 !== entry.totalSha256) {
+        throw new ParityError(`${scenarioId}: totalSha256: run ${r.totalSha256.slice(0, 16)}… vs baseline ${entry.totalSha256.slice(0, 16)}…`);
     }
-    const lo = Math.max(0, off - 16);
-    const hi = Math.min(a.length, b.length, off + 17);
-    return `; first diff @ byte ${off}: A=0x${a[off].toString(16).padStart(2, '0')} B=0x${b[off].toString(16).padStart(2, '0')}` +
-        `; A[${lo}..${hi}) = ${hex(a, lo, hi)}; B[${lo}..${hi}) = ${hex(b, lo, hi)}`;
 }
 
 // ---- runner ------------------------------------------------------------------------
 
-// Drives both muxers over the identical op list in lockstep; every
-// 'poll' op's output is compared immediately (the drain sequence across
-// the whole timeline is the unit of comparison). spec.mutateB(op, i)
-// adapts side B's op for the negative control only.
+// Drives one muxer over the op list; every 'poll' op is structure-checked
+// and sha256-digested immediately (the drain sequence across the whole
+// timeline is the unit of comparison).
 function runScenario(spec) {
-    const a = SRC_A.createMuxer();
-    const b = SRC_B.createMuxer();
+    const m = SRC.createMuxer();
     const polls = [];
+    const drainDigests = [];
+    const total = createHash('sha256');
     let bytes = 0;
     try {
         for (let i = 0; i < spec.ops.length; i++) {
-            const opA = spec.ops[i];
-            const opB = spec.mutateB ? spec.mutateB(opA, i) : opA;
-            const outA = exec(a, opA);
-            const outB = exec(b, opB);
+            const op = spec.ops[i];
+            const out = exec(m, op);
             COUNTS.ops++;
-            if (opA[0] !== 'poll') continue;
+            if (op[0] !== 'poll') continue;
             const pollIdx = polls.length;
-            checkStructure(spec.id, i, pollIdx, outA);
-            checkStructure(spec.id, i, pollIdx, outB);
-            comparePoll(spec.id, i, pollIdx, outA, outB);
+            checkStructure(spec.id, i, pollIdx, out);
             COUNTS.polls++;
-            COUNTS.pollBytes += outA.length;
-            COUNTS.packets += outA.length / PKT;
-            if (outA.length === 0) COUNTS.emptyPolls++;
-            bytes += outA.length;
-            polls.push(outA);
+            COUNTS.pollBytes += out.length;
+            COUNTS.packets += out.length / PKT;
+            if (out.length === 0) COUNTS.emptyPolls++;
+            bytes += out.length;
+            polls.push(out);
+            drainDigests.push(sha(out));
+            total.update(out);
         }
         if (spec.expect !== undefined) spec.expect({ id: spec.id, polls });
     } catch (e) {
-        if (e instanceof ParityError) {
-            if (spec.negative === true) return { id: spec.id, failed: true, at: e.message };
-            fail(`parity divergence — ${e.message}`);
-        }
+        if (e instanceof ParityError) fail(`parity divergence — ${e.message}`);
         throw e;
     } finally {
-        a.free();
-        b.free();
+        m.free();
         COUNTS.scenarios++;
     }
-    return { id: spec.id, failed: false, ops: spec.ops.length, polls: polls.length, bytes };
+    return {
+        id: spec.id, ops: spec.ops.length, drains: polls.length, bytes,
+        packets: bytes / PKT, drainDigests, totalSha256: total.digest('hex'),
+    };
+}
+
+// The per-scenario baseline entry: totals gate the drain list for sanity.
+function baselineEntry(r) {
+    return {
+        ops: r.ops, drains: r.drains, bytes: r.bytes, packets: r.packets,
+        drainDigests: r.drainDigests, totalSha256: r.totalSha256,
+    };
 }
 
 // ---- the corpus --------------------------------------------------------------------
@@ -818,42 +807,15 @@ const SCENARIOS = [
     scenarioC1(),
 ];
 
-// ---- source loading ================================================================
+// ---- source + baseline ==============================================================
 //
-// SEAM - the only implementation-aware code in this file. The comparator
-// above consumes the wasm-bindgen surface as-is (new TsMuxer /
-// setVideoCodec / setVideoEnabled / setAudioCodec / addAudioPid /
-// setSparseEnabled / setSparseThreshold / push_video / push_audio /
-// push_pcm / push_pcm_pid / poll / free). The C++ port (M7) plugs in
-// HERE: js/muxer_engine.js returns the same { label, createMuxer } shape
-// for side B; comparator and corpus stay untouched.
+// The ONLY implementation this gate loads: the C++ muxer (harness/ts_muxer)
+// exported from the engine module and wrapped by js/muxer_engine.js into
+// the wasm-bindgen surface the executor consumes (new TsMuxer / the 12
+// public methods / free). The golden baseline IS the oracle - nothing
+// outside this repo is read.
 
-async function loadRustSource() {
-    // ./build.sh page creates the page/wasm symlink (build.sh:121);
-    // without it, fall back to the WebSRT checkout directly - same pkg,
-    // the symlink must not be required.
-    const candidates = [
-        resolve(HERE, '../page/wasm/ts-muxer-wasm'),
-        resolve(process.env.HOME ?? '', 'maxolgi/WebSRT/web/wasm/ts-muxer-wasm'),
-    ];
-    const idx = candidates.findIndex((d) => existsSync(join(d, 'ts_muxer_wasm.js')));
-    if (idx < 0) fail(`ts-muxer-wasm pkg not found (tried ${candidates.join(' and ')})`);
-    const dir = candidates[idx];
-    // initSync + fs bytes: the glue's default init() fetch()es its URL,
-    // which node cannot do for file: URLs. One module, many muxer
-    // instances.
-    const glue = await import(pathToFileURL(join(dir, 'ts_muxer_wasm.js')).href);
-    glue.initSync({ module: new WebAssembly.Module(readFileSync(join(dir, 'ts_muxer_wasm_bg.wasm'))) });
-    return {
-        label: idx === 0 ? 'rust:ts-muxer-wasm (page/wasm symlink)' : 'rust:ts-muxer-wasm (WebSRT checkout fallback)',
-        createMuxer: () => new glue.TsMuxer(),
-    };
-}
-
-// SEAM, C++ side: the M7 port (harness/ts_muxer.{h,cpp}) exported from
-// the engine module and wrapped by js/muxer_engine.js into the same
-// wasm-bindgen surface. Same { label, createMuxer } shape as above.
-async function loadCppSource() {
+async function loadSource() {
     const engine = await import('./muxer_engine.js');
     await engine.default(); // loads build/srt_engine.mjs (built by ./build.sh engine)
     return {
@@ -862,38 +824,81 @@ async function loadCppSource() {
     };
 }
 
-const SRC_A = await loadRustSource();
-const SRC_B = CPP ? await loadCppSource() : SRC_A; // default: Rust vs Rust
-pass(`side A = ${SRC_A.label}, side B = ${SRC_B === SRC_A ? 'side A' : SRC_B.label}`);
+const SRC = await loadSource();
+pass(`source = ${SRC.label}`);
+
+const BASELINE_FILE = join(HERE, 'fixtures/muxer.baseline.json');
+const OLD_BASELINE = loadBaseline(BASELINE_FILE);
+if (!RECORD && OLD_BASELINE === null) {
+    fail(`no baseline at ${BASELINE_FILE} - record one first (node js/muxer_parity.mjs --record)`);
+}
+if (OLD_BASELINE !== null && (typeof OLD_BASELINE.cases !== 'object' || OLD_BASELINE.cases === null)) {
+    fail(`${BASELINE_FILE}: malformed baseline (no cases object) - re-record with --record`);
+}
+const BASELINE_CASES = RECORD ? {} : OLD_BASELINE.cases;
+const NEW_CASES = RECORD ? {} : null;
+if (!RECORD) pass(`baseline = ${BASELINE_FILE} (${OLD_BASELINE.provenance})`);
 
 // ---- run the corpus -----------------------------------------------------------------
 
 for (const spec of SCENARIOS) {
     const r = runScenario(spec);
-    pass(`${r.id} — ${r.ops} ops, ${r.polls} drains, ${r.bytes.toLocaleString('en-US')} B (${spec.note})`);
+    pass(`${r.id} — ${r.ops} ops, ${r.drains} drains, ${r.bytes.toLocaleString('en-US')} B (${spec.note})`);
+    if (RECORD) {
+        NEW_CASES[spec.id] = baselineEntry(r);
+        continue;
+    }
+    const entry = BASELINE_CASES[spec.id];
+    if (entry === undefined) fail(`baseline has no entry for "${spec.id}" (stale baseline? re-record with --record)`);
+    try {
+        assertBaseline(spec.id, r, entry);
+    } catch (e) {
+        if (e instanceof ParityError) fail(`baseline divergence — ${e.message}`);
+        throw e;
+    }
+    COUNTS.baselineCases++;
 }
 
-// ---- negative control (the comparator must be able to FAIL) --------------------------
+// ---- negative control (the gate must be able to FAIL) ---------------------------------
 
 {
-    const neg = runScenario({
-        id: 'negative (V2, side B kf flipped on push #3)',
-        ops: scenarioV2().ops,
-        negative: true,
-        mutateB: (op, i) => (i === 6 && op[0] === 'pv' ? ['pv', op[1], op[2], op[3], !op[4]] : op),
-    });
-    if (!neg.failed) fail('negative control (side B keyframe flag flipped) did NOT diverge — comparator cannot fail');
-    if (!/op #\d+ \(poll #\d+\): /.test(neg.at)) fail(`negative control report malformed: ${neg.at}`);
-    pass(`negative control — comparator flagged: ${neg.at}`);
+    // Honest C1 run vs its own baseline entry with ONE drain digest
+    // tampered in memory: the comparison must flag exactly that drain.
+    const r = runScenario(scenarioC1());
+    const tampered = JSON.parse(JSON.stringify((RECORD ? NEW_CASES : BASELINE_CASES)['C1 poll cadence']));
+    const k = tampered.drainDigests.length - 1;
+    tampered.drainDigests[k] = (tampered.drainDigests[k][0] === '0' ? '1' : '0') + tampered.drainDigests[k].slice(1);
+    let msg = null;
+    try {
+        assertBaseline('negative (C1 vs tampered baseline)', r, tampered);
+    } catch (e) {
+        if (e instanceof ParityError) msg = e.message;
+        else throw e;
+    }
+    if (msg === null) fail('negative control (C1 vs its own baseline with one drain digest tampered in memory) did NOT diverge — the gate cannot fail');
+    if (!/^negative \(C1 vs tampered baseline\): drain #\d+: sha256 run [0-9a-f]{16}… vs baseline [0-9a-f]{16}…$/.test(msg)) {
+        fail(`negative control report malformed: ${msg}`);
+    }
+    pass(`negative control — baseline comparison flagged: ${msg}`);
 }
 
-// ---- summary ---------------------------------------------------------------------------
+// ---- record / summary -------------------------------------------------------------------
+
+if (RECORD) {
+    reportBaselineDrift(BASELINE_FILE, OLD_BASELINE, NEW_CASES);
+    const prov = baselineProvenance('harness/ts_muxer', currentCommit());
+    writeBaseline(BASELINE_FILE, prov, NEW_CASES);
+    console.log(`muxer_parity: recorded ${Object.keys(NEW_CASES).length} scenarios -> ${BASELINE_FILE}`);
+    console.log(`  provenance: ${prov}`);
+    process.exit(0);
+}
 
 console.log(
-    `muxer_parity: PASS — ${SRC_A.label} vs ${SRC_B === SRC_A ? 'itself' : SRC_B.label}: ` +
-    `${COUNTS.scenarios} scenarios (${SCENARIOS.length} corpus + 1 negative), ${COUNTS.ops} ops, ` +
+    `muxer_parity: PASS — ${SRC.label} vs ${BASELINE_FILE}: ` +
+    `${COUNTS.scenarios} scenario runs (${SCENARIOS.length} corpus + 1 negative), ` +
+    `${COUNTS.baselineCases} scenarios matched the baseline, ${COUNTS.ops} ops, ` +
     `${COUNTS.polls} poll drains (${COUNTS.emptyPolls} empty), ` +
     `${COUNTS.pollBytes.toLocaleString('en-US')} B in ${COUNTS.packets.toLocaleString('en-US')} TS packets ` +
-    `compared byte-identical (sha256 per drain), 0 exclusions`,
+    `byte-identical to the recorded per-drain sha256s`,
 );
 process.exit(0);

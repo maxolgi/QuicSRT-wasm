@@ -1,73 +1,57 @@
-// M5 demux parity gate, phase 1: Rust vs Rust (plan-notes/parity-spec.md).
+// M5 demux regression gate: the C++ demux (harness/ts_demux via
+// build/srt_engine.mjs) vs the committed GOLDEN BASELINE
+// js/fixtures/demux.baseline.json. plan-notes/parity-spec.md is the
+// historical contract the corpus and §-canonicalization below still
+// follow.
+//
+// Provenance: the baseline was recorded from the C++ build at a commit
+// where it was proven byte-identical to the Rust oracle over this exact
+// corpus (see the provenance field in the baseline file). The recorded
+// digests carry that parity forward - this gate is self-contained, it
+// loads nothing outside the repo.
 //
 // 1. Load the ten golden fixtures (§1; sha/size-gated against
-//    js/fixtures/manifest.sha256 per §3) and the Rust mpeg2ts-wasm pkg
-//    (via the page/wasm symlink when ./build.sh page made one, else
-//    straight from the WebSRT checkout - the symlink is never required).
+//    js/fixtures/manifest.sha256 per §3).
 // 2. Run every §1 fixture + every §2 crafted corruption (byte transforms
 //    applied AT FEED TIME - nothing corrupted is stored) plus one extra
 //    pass per 302M fixture with setMeterSelection(pid, 1) issued before
-//    the first feed (§4.3), through TWO independent TsDemuxer instances in
-//    1128-byte chunks (6x188, the live SRT payload size), comparing after
-//    EVERY feed: canonical events (§4.1), DebugSnapshot (§4.2) and - on
-//    the 302M fixtures - MeterSnapshot (§4.3). PES bytes and PCM f32
-//    sample bits are compared via sha256 (bit-identical PCM is asserted,
-//    never fuzzed); lufs/spectrum are tolerant at abs 1e-6 with the
-//    -70/-80 sentinels matched as literals.
+//    the first feed (§4.3), through a TsDemuxer in 1128-byte chunks (6x188,
+//    the live SRT payload size), digesting after EVERY feed: canonical
+//    events (§4.1) into the per-case event-stream digest, DebugSnapshot
+//    (§4.2) into the snapshot digest and - on the 302M fixtures -
+//    MeterSnapshot (§4.3) into the meter digest. PES bytes and PCM f32
+//    sample bits enter the digest via sha256 (bit-exact pinning);
+//    ringT/errorT/bitratesMbps stay excluded everywhere (§4.2, checked
+//    finite >= 0 only) so nothing leaks wall time into the baseline.
+//    Per-case counts (feeds/bytes/events/snaps/meters/kinds) gate the
+//    digests for sanity.
 // 3. Chunk-boundary invariance (§5.3): each fixture re-run at chunk sizes
 //    {188, 1128, 7} must produce identical concatenated event streams.
-// 4. Error-text canonicalizer (§5.4): C6's raw kind-4 texts match
-//    ^ts parse: (InvalidInput|Unsupported|Other): .+ \(at .+:\d+\)$ and
-//    the canonicalized texts contain no " (at ".
+// 4. Error-text canonicalizer (§5.4, ported form): C6's raw kind-4 texts
+//    match ^ts parse: (InvalidInput|Unsupported|Other): .+$ - the C++
+//    port omits the Rust fork's machine-specific " (at file:line)"
+//    location suffix (harness/ts_demux.cpp), so its reappearance is
+//    flagged too; the canonicalized texts contain no " (at " either way.
 // 5. Wall-clock isolation (§5.5): one fixture run twice must produce the
-//    identical canonical digest - ringT/errorT/bitratesMbps are excluded
-//    everywhere (§4.2, checked finite >= 0 only) and nothing else may
-//    leak wall time.
-// 6. Negative control: side A fed a_aac.ts, side B fed av_shortgop.ts -
-//    the comparator MUST report the first divergence (§5.6), proving the
-//    harness cannot silently pass everything.
+//    identical canonical digests, and both must match the baseline entry.
+// 6. Negative control: an honest S4 run compared against its own baseline
+//    entry with ONE digest tampered in memory MUST be flagged - the gate
+//    is provably able to fail.
 //
 // Usage:
-//   node js/demux_parity.mjs [--cpp] [--m5-stage <core|nal|aes3|meter|full>]
-//                            [--exclude=<entry>]...
+//   node js/demux_parity.mjs           gate vs the baseline (exit 0 = pass)
+//   node js/demux_parity.mjs --record  re-record the baseline from the
+//                                      current build and print the drift
+//                                      vs the existing file
 //
-// --cpp runs side B on the C++ port (build/srt_engine.mjs via
-// js/demux_engine.js) instead of a second Rust instance; default stays
-// Rust-vs-Rust. The comparator/canonicalizer are shared.
-//
-// --m5-stage <name> expands to that stage's CANONICAL exclusion set (the
-// M5_STAGE_EXCLUSIONS table below): the staged fields NOT yet ported by
-// that M5 step - core = the demux-core-only set (pcm kind x6, pes nal x2,
-// snapshot nal x4, meter DSP x8, 20 entries), nal = core minus the 6 nal
-// entries (nal.rs ported), aes3 = nal minus the pcm kind (aes3.rs
-// ported), meter = aes3 minus the 8 meter DSP fields (meter.rs ported),
-// full = none (identical to the flagless run; meter and full coincide -
-// both kept so the flag reads forward). Default with no --m5-stage flag
-// is the unchanged full comparison; --exclude entries stack on top of a
-// stage's set.
-//
-// TEMPORARY staged exclusions for the C++ port rollout (M5 steps 2-5):
-// each --exclude entry drops ONE field from comparison - "kind:field" for
-// events (pat/pmt/pes/random_access/error/pcm, e.g. pes:pts) or a bare
-// DebugSnapshot/MeterSnapshot field name (e.g. ringHex, lufs). Excluded
-// comparisons are COUNTED and printed in the summary, never silently
-// skipped. When EVERY field of one event kind is excluded, that kind is
-// staged out entirely: its events are dropped from both sides before the
-// count/field comparison (counted the same way). Default (no flags) is
-// the full §4 rule set; every exclusion must be gone again before M5
-// step 6 ships.
-//
-// Exit 0 = pass; on divergence exit 1 with case id, feed, byte offset,
-// event index, field name and both values (§5.6).
+// On divergence exit 1 with case id and the first mismatching count or
+// digest.
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-
-// §4: run with RUST_BACKTRACE unset - the fork's Error Display appends a
-// backtrace when captured, which would leak into event text.
-delete process.env.RUST_BACKTRACE;
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { baselineProvenance, currentCommit, loadBaseline, reportBaselineDrift, writeBaseline } from './baseline.js';
 
 function fail(msg) {
     console.error(`demux_parity: FAIL: ${msg}`);
@@ -81,6 +65,11 @@ function pass(msg) {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CHUNK = 1128; // 6x188, the live SRT payload size (§5.2)
 
+const RECORD = process.argv.slice(2).includes('--record');
+for (const arg of process.argv.slice(2)) {
+    if (arg !== '--record') fail(`unknown argument "${arg}" (usage: node js/demux_parity.mjs [--record])`);
+}
+
 // ---- comparator configuration (§4 field lists) -------------------------------
 
 const KIND_NAMES = ['pat', 'pmt', 'pes', 'random_access', 'error', 'pcm'];
@@ -93,8 +82,8 @@ const EVENT_FIELDS = {
     pcm: ['pid', 'pts', 'streamType', 'programNum', 'sampleCount', 'samplesSha256'],
 };
 
-// DebugSnapshot §4.2: compared exactly. The wall-clock trio below is NOT
-// in this list - it is asserted finite >= 0 and never compared.
+// DebugSnapshot §4.2: digested exactly. The wall-clock trio below is NOT
+// in this list - it is asserted finite >= 0 and never digested.
 const SNAPSHOT_FIELDS = [
     'programNum', 'pmtPid',
     'pmtPids', 'pmtStreamTypes', 'pmtFormatIds',
@@ -105,141 +94,30 @@ const SNAPSHOT_FIELDS = [
     'ringPid', 'ringKind', 'ringPts', 'ringDts', 'ringSize', 'ringRa', 'ringTei',
     'ringPusi', 'ringNal', 'ringNalOffsets', 'ringHex',
 ];
-const SNAPSHOT_STRING_ARRAYS = new Set(['pmtFormatIds', 'errorMsg', 'ringHex']);
 const WALL_CLOCK_FIELDS = ['ringT', 'errorT', 'bitratesMbps']; // §4.2 excluded
 
-// MeterSnapshot §4.3 (plan-notes/meter-parity.md §2, adopted verbatim)
+// MeterSnapshot §4.3 (plan-notes/meter-parity.md §2, adopted verbatim):
+// all 12 fields digested raw - the baseline pins exact f32 bits, the
+// oracle-era ±1e-6 dB tolerance only made sense across implementations.
 const METER_FIELDS = [
     'pids', 'channelCounts', 'peaks', 'clips', 'rms', 'lufs', 'phase',
     'scopeL', 'scopeR', 'spectrum', 'selectedPid', 'selectedChannel',
 ];
-const METER_F32_EXACT = new Set(['peaks', 'rms', 'phase', 'scopeL', 'scopeR']);
-const METER_TOLERANT = new Map([['lufs', -70.0], ['spectrum', -80.0]]); // sentinel literals
-const METER_TOLERANCE = 1e-6; // abs, dB
-
-// ---- staged exclusions (TEMPORARY; see header) --------------------------------
-
-// --m5-stage canonical exclusion sets: each stage's set is the full §4
-// compared surface minus everything the C++ port implements BY that stage
-// (later stages are strict subsets - the shrink schedule for the M5 port
-// tasks, frozen here so each task only flips the stage name):
-//   core  demux core only: pcm kind staged out entirely (aes3 pending),
-//         pes nal tables + snapshot nal fields empty (nal pending), meter
-//         DSP empty shapes (meter pending) - M5 step 4's 20-entry set.
-//   nal   + nal.rs: drops pes:nalOffsets, pes:nalTypes, nalPids, nalStats,
-//         ringNal, ringNalOffsets.
-//   aes3  + aes3.rs: also drops the 6 pcm:* entries (kind-5 events now
-//         exist and compare in full).
-//   meter + meter.rs: also drops the 8 meter DSP fields.
-//   full  no exclusions - identical to the flagless run (meter/full
-//         coincide; both kept so the flag reads forward).
-const M5_STAGE_EXCLUSIONS = {
-    core: [
-        'pcm:pid', 'pcm:pts', 'pcm:streamType', 'pcm:programNum', 'pcm:sampleCount', 'pcm:samplesSha256',
-        'pes:nalOffsets', 'pes:nalTypes',
-        'nalPids', 'nalStats', 'ringNal', 'ringNalOffsets',
-        'peaks', 'rms', 'clips', 'lufs', 'phase', 'scopeL', 'scopeR', 'spectrum',
-    ],
-    nal: [
-        'pcm:pid', 'pcm:pts', 'pcm:streamType', 'pcm:programNum', 'pcm:sampleCount', 'pcm:samplesSha256',
-        'peaks', 'rms', 'clips', 'lufs', 'phase', 'scopeL', 'scopeR', 'spectrum',
-    ],
-    aes3: ['peaks', 'rms', 'clips', 'lufs', 'phase', 'scopeL', 'scopeR', 'spectrum'],
-    meter: [],
-    full: [],
-};
-
-const EXCLUDE_EVENTS = new Map(); // kind name -> Set<field>
-const EXCLUDE_SNAPSHOT = new Set();
-let CPP = false; // --cpp: side B runs the C++ port instead of Rust
-let M5_STAGE = null; // --m5-stage <name>: canonical staged-exclusion set
-{
-    // Pass 1 collects flags and expands the stage into --exclude entries;
-    // pass 2 validates them all through the same path (stage entries are
-    // hardcoded valid, but routing them through the identical check keeps
-    // the table honest).
-    const raw = process.argv.slice(2);
-    const excludeArgs = [];
-    for (let i = 0; i < raw.length; i++) {
-        const arg = raw[i];
-        if (arg === '--cpp') {
-            CPP = true;
-            continue;
-        }
-        if (arg === '--m5-stage' || arg.startsWith('--m5-stage=')) {
-            const stage = arg.startsWith('--m5-stage=') ? arg.slice('--m5-stage='.length) : raw[++i];
-            if (stage === undefined || !Object.prototype.hasOwnProperty.call(M5_STAGE_EXCLUSIONS, stage)) {
-                fail(`bad --m5-stage "${stage ?? ''}" - expected one of {${Object.keys(M5_STAGE_EXCLUSIONS).join('|')}}`);
-            }
-            if (M5_STAGE !== null && M5_STAGE !== stage) {
-                fail(`--m5-stage given twice (${M5_STAGE} and ${stage}) - one stage per run`);
-            }
-            M5_STAGE = stage;
-            excludeArgs.push(...M5_STAGE_EXCLUSIONS[stage].map((e) => `--exclude=${e}`));
-            continue;
-        }
-        if (!arg.startsWith('--exclude=')) {
-            fail(`unknown argument "${arg}" (usage: node js/demux_parity.mjs [--cpp] [--m5-stage <core|nal|aes3|meter|full>] [--exclude=kind:field | --exclude=snapshot-field]...)`);
-        }
-        excludeArgs.push(arg);
-    }
-    for (const arg of excludeArgs) {
-        const entry = arg.slice('--exclude='.length);
-        const colon = entry.indexOf(':');
-        if (colon !== -1) {
-            const kind = entry.slice(0, colon);
-            const field = entry.slice(colon + 1);
-            if (!KIND_NAMES.includes(kind) || !EVENT_FIELDS[kind].includes(field)) {
-                fail(`bad event exclusion "${entry}" - expected kind:field, kind in {${KIND_NAMES.join('|')}} and field in that kind's §4.1 canonical form`);
-            }
-            if (!EXCLUDE_EVENTS.has(kind)) EXCLUDE_EVENTS.set(kind, new Set());
-            EXCLUDE_EVENTS.get(kind).add(field);
-        } else {
-            if (WALL_CLOCK_FIELDS.includes(entry)) {
-                fail(`"${entry}" is excluded by spec §4.2 (wall clock) - staged exclusions apply to compared fields only`);
-            }
-            if (!SNAPSHOT_FIELDS.includes(entry) && !METER_FIELDS.includes(entry)) {
-                fail(`bad snapshot exclusion "${entry}" - expected a DebugSnapshot or MeterSnapshot field name`);
-            }
-            EXCLUDE_SNAPSHOT.add(entry);
-        }
-    }
-}
-{
-    if (M5_STAGE !== null) {
-        const n = M5_STAGE_EXCLUSIONS[M5_STAGE].length;
-        console.log(`note: --m5-stage ${M5_STAGE} - canonical staged-exclusion set${n === 0 ? ' (empty: identical to the flagless full comparison)' : ` (${n} entries)`}`);
-    }
-    const entries = [...EXCLUDE_EVENTS].flatMap(([k, s]) => [...s].map((f) => `${k}:${f}`)).concat([...EXCLUDE_SNAPSHOT]);
-    if (entries.length > 0) {
-        console.log(`note: TEMPORARY staged exclusions active (C++ port rollout): ${entries.join(', ')} - skipped comparisons are counted and reported in the summary`);
-    }
-}
-const EXCLUDED_COUNTS = new Map(); // entry -> comparisons skipped
-const countExcluded = (entry) => EXCLUDED_COUNTS.set(entry, (EXCLUDED_COUNTS.get(entry) ?? 0) + 1);
-
-// A kind whose EVERY §4.1 field is excluded is staged out entirely (see
-// runCase): its events are dropped from both sides of the comparison.
-const kindStagedOut = (kind) => {
-    const excl = EXCLUDE_EVENTS.get(kind);
-    return excl !== undefined && excl.size === EVENT_FIELDS[kind].length;
-};
-const countKindStagedOut = (kind) => {
-    for (const f of EVENT_FIELDS[kind]) countExcluded(`${kind}:${f}`);
-};
 
 const COUNTS = {
-    caseRuns: 0,
-    eventPairs: 0, eventFields: 0, streamCompares: 0,
+    caseRuns: 0, baselineCases: 0,
+    events: 0, eventFields: 0, streamCompares: 0,
     snaps: 0, snapFields: 0, wallClock: 0,
     meters: 0, meterFields: 0,
 };
 
 // ---- canonical forms (§4.1) ----------------------------------------------------
 
-// §5.4 (b): the fork embeds " <cargo-checkout-path>:<line>" in every parse
-// error; §4.1 kind 4 strips " \(at .+\)$" off the reason.
-const ERR_RAW_RE = /^ts parse: (InvalidInput|Unsupported|Other): .+ \(at .+:\d+\)$/;
+// §5.4: the Rust fork's Display embedded " <cargo-checkout-path>:<line>"
+// in every parse error, so §4.1 kind 4 strips " \(at .+\)$" off the
+// reason; the C++ port omits the suffix already (harness/ts_demux.cpp)
+// and the strip must stay a no-op, never a hiding place.
+const ERR_RAW_RE = /^ts parse: (InvalidInput|Unsupported|Other): .+$/;
 const stripAt = (s) => s.replace(/ \(at .+\)$/, '');
 
 function int90k(caseName, what, x) {
@@ -285,9 +163,10 @@ function canonEvent(e, caseName, watch) {
     } else if (kind === 4) { // error
         const raw = e.text;
         const canon = stripAt(raw);
-        if (watch) { // §5.4 (C6): prove the stripper is exact
+        if (watch) { // §5.4 (C6): prove the canonical form holds
             watch.errEvents++;
             if (!ERR_RAW_RE.test(raw)) watch.errRawBad++;
+            if (raw.includes(' (at ')) watch.errAtBad++;
             if (canon.includes(' (at ')) watch.errCanonBad++;
         }
         c.text = canon;
@@ -303,7 +182,7 @@ function canonEvent(e, caseName, watch) {
     return c;
 }
 
-// ---- comparator (§4) ------------------------------------------------------------
+// ---- digests (the baseline pins exactly what §4 compared) -----------------------
 
 class ParityError extends Error {}
 
@@ -316,49 +195,68 @@ function fmtVal(v) {
     return s === undefined ? String(v) : (s.length > 80 ? `${s.slice(0, 80)}…` : s);
 }
 
-// First divergence only (§5.6): case id, where (event/snapshot index, feed,
-// byte offset), field, both values.
+// First divergence only (§5.6 style): case id, where, field, both values.
 function diverge(ctx, where, field, a, b) {
     throw new ParityError(`${ctx.caseName}: ${where}: ${field}: A=${fmtVal(a)} B=${fmtVal(b)}`);
 }
 
-// NaN-tolerant equality for f64 snapshot vectors (never legitimate, but a
-// NaN on both sides must not read as a divergence).
-const numEq = (x, y) => x === y || (Number.isNaN(x) && Number.isNaN(y));
+// 64-hex digests print as 16 chars + ellipsis; anything else as JSON.
+const shortVal = (v) => (typeof v === 'string' && v.length > 24 ? `${v.slice(0, 16)}…` : JSON.stringify(v));
 
-const f32Scratch = new ArrayBuffer(4);
-const f32View = new Float32Array(f32Scratch);
-const u32View = new Uint32Array(f32Scratch);
-function f32Bits(x) {
-    f32View[0] = x;
-    return u32View[0];
-}
-const SENTINEL_BITS = new Map([...METER_TOLERANT].map(([f, s]) => [f, f32Bits(s)]));
-
-// The canonical digest (§5.5) covers exactly the compared data, so a
-// wall-clock leak into any compared field changes it across two runs.
-function digestField(ctx, tag, v) {
-    if (ctx.digest === null) return;
-    ctx.digest.update(`${tag}=`);
+function digestField(h, tag, v) {
+    h.update(`${tag}=`);
     if (ArrayBuffer.isView(v)) {
-        ctx.digest.update(`#${v.length};`);
-        ctx.digest.update(Buffer.from(v.buffer, v.byteOffset, v.byteLength));
+        h.update(`#${v.length};`);
+        h.update(Buffer.from(v.buffer, v.byteOffset, v.byteLength));
     } else if (Array.isArray(v)) {
-        ctx.digest.update(`#${v.length};`);
-        for (const x of v) ctx.digest.update(`${typeof x === 'string' ? x : String(x)},`);
+        h.update(`#${v.length};`);
+        for (const x of v) h.update(`${typeof x === 'string' ? x : String(x)},`);
     } else {
-        ctx.digest.update(String(v));
+        h.update(String(v));
     }
-    ctx.digest.update('\n');
+    h.update('\n');
 }
+
+function digestEvent(c, h) {
+    digestField(h, 'ev.kind', c.kind);
+    for (const f of EVENT_FIELDS[c.kind]) {
+        digestField(h, `ev.${f}`, c[f]);
+        COUNTS.eventFields++;
+    }
+    COUNTS.events++;
+}
+
+function digestSnapshot(s, ctx, where) {
+    for (const f of SNAPSHOT_FIELDS) {
+        const a = f === 'errorMsg' ? s[f].map(stripAt) : s[f]; // §4.1 canonical
+        digestField(ctx.snap, `snap.${f}`, a);
+        COUNTS.snapFields++;
+    }
+    // Wall-clock trio (§4.2): assert finite >= 0, never digest.
+    for (const f of WALL_CLOCK_FIELDS) {
+        const a = s[f];
+        for (let i = 0; i < a.length; i++) {
+            if (!Number.isFinite(a[i]) || a[i] < 0) {
+                fail(`${ctx.caseName}: ${where}: ${f}[${i}] = ${a[i]} - wall-clock fields must be finite >= 0 (§4.2)`);
+            }
+            COUNTS.wallClock++;
+        }
+    }
+    COUNTS.snaps++;
+}
+
+function digestMeter(m, ctx) {
+    for (const f of METER_FIELDS) {
+        digestField(ctx.meter, `meter.${f}`, m[f]);
+        COUNTS.meterFields++;
+    }
+    COUNTS.meters++;
+}
+
+// ---- in-run stream comparisons (self-consistency; no baseline involved) --------
 
 function compareCanonFields(cA, cB, ctx, where) {
-    const excl = EXCLUDE_EVENTS.get(cA.kind);
     for (const f of EVENT_FIELDS[cA.kind]) {
-        if (excl !== undefined && excl.has(f)) {
-            countExcluded(`${cA.kind}:${f}`);
-            continue;
-        }
         const a = cA[f];
         const b = cB[f];
         if (Array.isArray(a) || ArrayBuffer.isView(a)) {
@@ -369,99 +267,13 @@ function compareCanonFields(cA, cB, ctx, where) {
         } else if (a !== b) {
             diverge(ctx, where, f, a, b);
         }
-        digestField(ctx, `ev.${f}`, a);
         COUNTS.eventFields++;
     }
 }
 
 function compareEvents(cA, cB, ctx, where) {
     if (cA.kind !== cB.kind) diverge(ctx, where, 'kind', cA.kind, cB.kind);
-    digestField(ctx, 'ev.kind', cA.kind);
     compareCanonFields(cA, cB, ctx, where);
-    COUNTS.eventPairs++;
-}
-
-function compareSnapshots(sA, sB, ctx, where) {
-    for (const f of SNAPSHOT_FIELDS) {
-        if (EXCLUDE_SNAPSHOT.has(f)) {
-            countExcluded(f);
-            continue;
-        }
-        let a = sA[f];
-        let b = sB[f];
-        if (f === 'errorMsg') { // canonicalized per §4.1
-            a = a.map(stripAt);
-            b = b.map(stripAt);
-        }
-        if (SNAPSHOT_STRING_ARRAYS.has(f)) {
-            if (a.length !== b.length) diverge(ctx, where, `${f}.length`, a.length, b.length);
-            for (let i = 0; i < a.length; i++) {
-                if (a[i] !== b[i]) diverge(ctx, where, `${f}[${i}]`, a[i], b[i]);
-            }
-        } else if (typeof a === 'number') { // programNum, pmtPid
-            if (!numEq(a, b)) diverge(ctx, where, f, a, b);
-        } else {
-            if (a.length !== b.length) diverge(ctx, where, `${f}.length`, a.length, b.length);
-            for (let i = 0; i < a.length; i++) {
-                if (!numEq(a[i], b[i])) diverge(ctx, where, `${f}[${i}]`, a[i], b[i]);
-            }
-        }
-        digestField(ctx, `snap.${f}`, a);
-        COUNTS.snapFields++;
-    }
-    // Wall-clock trio (§4.2): assert finite >= 0, never compare.
-    for (const f of WALL_CLOCK_FIELDS) {
-        const a = sA[f];
-        for (let i = 0; i < a.length; i++) {
-            if (!Number.isFinite(a[i]) || a[i] < 0) {
-                diverge(ctx, where, `${f}[${i}]`, a[i], 'wall-clock fields must be finite >= 0 (§4.2)');
-            }
-            COUNTS.wallClock++;
-        }
-    }
-    COUNTS.snaps++;
-}
-
-function compareMeters(mA, mB, ctx, where) {
-    for (const f of METER_FIELDS) {
-        if (EXCLUDE_SNAPSHOT.has(f)) {
-            countExcluded(f);
-            continue;
-        }
-        const a = mA[f];
-        const b = mB[f];
-        if (typeof a === 'number') { // selectedPid, selectedChannel
-            if (!numEq(a, b)) diverge(ctx, where, f, a, b);
-        } else {
-            if (a.length !== b.length) diverge(ctx, where, `${f}.length`, a.length, b.length);
-            const sentinel = METER_TOLERANT.get(f);
-            if (sentinel !== undefined) {
-                // tolerant abs 1e-6 dB, but the -70/-80 sentinels match as
-                // literals (§4.3)
-                const sbits = SENTINEL_BITS.get(f);
-                for (let i = 0; i < a.length; i++) {
-                    if (f32Bits(a[i]) === f32Bits(b[i])) continue;
-                    if (f32Bits(a[i]) === sbits || f32Bits(b[i]) === sbits) {
-                        diverge(ctx, where, `${f}[${i}] (sentinel ${sentinel} must match as a literal)`, a[i], b[i]);
-                    }
-                    if (Math.abs(a[i] - b[i]) > METER_TOLERANCE) {
-                        diverge(ctx, where, `${f}[${i}] (abs diff > ${METER_TOLERANCE})`, a[i], b[i]);
-                    }
-                }
-            } else if (METER_F32_EXACT.has(f)) {
-                for (let i = 0; i < a.length; i++) {
-                    if (f32Bits(a[i]) !== f32Bits(b[i])) diverge(ctx, where, `${f}[${i}] (exact-bit)`, a[i], b[i]);
-                }
-            } else { // pids, channelCounts, clips
-                for (let i = 0; i < a.length; i++) {
-                    if (a[i] !== b[i]) diverge(ctx, where, `${f}[${i}]`, a[i], b[i]);
-                }
-            }
-        }
-        digestField(ctx, `meter.${f}`, a);
-        COUNTS.meterFields++;
-    }
-    COUNTS.meters++;
 }
 
 // ---- §2 crafted corruptions (feed-time transforms; nothing stored) -------------
@@ -556,41 +368,13 @@ function chunkList(buf, size = CHUNK) {
 
 // ---- source loading =============================================================
 //
-// SEAM - the only implementation-aware code in this file. The comparator
-// above consumes the wasm-bindgen surface as-is (new TsDemuxer / feed /
-// debugSnapshot / meter_snapshot / setMeterSelection / free; events and
-// snapshots read via property accessors, pmtEntries()/pmtFormatIds() as
-// methods). The C++ port task (M5 steps 2-5) plugs in HERE: add a loader
-// for build/srt_engine.mjs returning the same { label, createDemuxer }
-// shape and hand it to side B below; comparator and canonicalizer stay
-// untouched.
+// The ONLY implementation this gate loads: the C++ demux (harness/ts_demux)
+// exported from the engine module and wrapped by js/demux_engine.js into
+// the wasm-bindgen surface the canonicalizer consumes (new TsDemuxer /
+// feed / debugSnapshot / meter_snapshot / setMeterSelection / free). The
+// golden baseline IS the oracle - nothing outside this repo is read.
 
-async function loadRustSource() {
-    // ./build.sh page creates the page/wasm symlink (build.sh:114); without
-    // it, fall back to the WebSRT checkout directly - same pkgs, the
-    // symlink must not be required.
-    const candidates = [
-        resolve(HERE, '../page/wasm/mpeg2ts-wasm'),
-        resolve(process.env.HOME ?? '', 'maxolgi/WebSRT/web/wasm/mpeg2ts-wasm'),
-    ];
-    const idx = candidates.findIndex((d) => existsSync(join(d, 'mpeg2ts_wasm.js')));
-    if (idx < 0) fail(`mpeg2ts-wasm pkg not found (tried ${candidates.join(' and ')})`);
-    const dir = candidates[idx];
-    // initSync + fs bytes: the glue's default init() fetch()es its URL,
-    // which node cannot do for file: URLs. One module, many demuxer
-    // instances (§5.1).
-    const glue = await import(pathToFileURL(join(dir, 'mpeg2ts_wasm.js')).href);
-    glue.initSync({ module: new WebAssembly.Module(readFileSync(join(dir, 'mpeg2ts_wasm_bg.wasm'))) });
-    return {
-        label: idx === 0 ? 'rust:mpeg2ts-wasm (page/wasm symlink)' : 'rust:mpeg2ts-wasm (WebSRT checkout fallback)',
-        createDemuxer: () => new glue.TsDemuxer(),
-    };
-}
-
-// SEAM, C++ side: the M5 port (harness/ts_demux.{h,cpp}) exported from the
-// engine module and wrapped by js/demux_engine.js into the same
-// wasm-bindgen surface. Same { label, createDemuxer } shape as above.
-async function loadCppSource() {
+async function loadSource() {
     const engine = await import('./demux_engine.js');
     await engine.default(); // loads build/srt_engine.mjs (built by ./build.sh engine)
     return {
@@ -601,111 +385,78 @@ async function loadCppSource() {
 
 // ---- runners ---------------------------------------------------------------------
 
-// Drives two demuxers over identical chunk lists in lockstep; after every
-// feed: canonical events (§4.1), DebugSnapshot (§4.2), and - when meter is
-// set - MeterSnapshot (§4.3), both sides called the same number of times at
-// identical feed boundaries (meter_snapshot is &mut self and mutates).
+// Drives one demuxer over the chunk list; after every feed: canonical
+// events (§4.1) into the event-stream digest, DebugSnapshot (§4.2) into
+// the snapshot digest and - when meter is set - MeterSnapshot (§4.3) into
+// the meter digest (meter_snapshot is &mut self and mutates, so it is
+// called at the same feed boundaries the baseline was recorded at).
 function runCase(spec) {
-    const dA = SRC_A.createDemuxer();
-    const dB = SRC_B.createDemuxer();
+    const d = SRC.createDemuxer();
     if (spec.selection !== undefined) {
-        dA.setMeterSelection(spec.selection[0], spec.selection[1]);
-        dB.setMeterSelection(spec.selection[0], spec.selection[1]);
+        d.setMeterSelection(spec.selection[0], spec.selection[1]);
     }
-    const chunksB = spec.chunksB ?? spec.chunks;
-    const feeds = Math.max(spec.chunks.length, chunksB.length);
-    const ctx = { caseName: spec.id, digest: spec.digest === true ? createHash('sha256') : null };
-    const watch = spec.watch === true ? { errEvents: 0, errRawBad: 0, errCanonBad: 0 } : null;
+    const metered = spec.meter === true;
+    const evH = createHash('sha256');
+    const ctx = {
+        caseName: spec.id,
+        snap: createHash('sha256'),
+        meter: metered ? createHash('sha256') : null,
+    };
+    const watch = spec.watch === true ? { errEvents: 0, errRawBad: 0, errAtBad: 0, errCanonBad: 0 } : null;
     const meta = { kinds: [0, 0, 0, 0, 0, 0], pesDtsNonNeg: 0, firstPmt: null, firstPcm: null };
     let eventIdx = 0, snapIdx = 0, meterIdx = 0, byteOff = 0;
     try {
-        for (let feed = 0; feed < feeds; feed++) {
-            const ca = spec.chunks[feed];
-            const cb = chunksB[feed];
-            if (ca === undefined || cb === undefined) {
-                // mismatched sides are legitimate only for the negative
-                // control; everywhere else this is a wiring bug
-                diverge(ctx, `feed #${feed} @ +${byteOff}B`, 'feed count', spec.chunks.length, chunksB.length);
-            }
-            const evA = dA.feed(ca);
-            const evB = dB.feed(cb);
-            const cA = evA.map((e) => canonEvent(e, spec.id, watch));
-            const cB = evB.map((e) => canonEvent(e, spec.id, null));
+        for (let feed = 0; feed < spec.chunks.length; feed++) {
+            const chunk = spec.chunks[feed];
+            const evs = d.feed(chunk);
+            const canon = evs.map((e) => canonEvent(e, spec.id, watch));
             try {
-                // side-A metadata for the per-case gates below - collected
-                // from every canonical event, including kinds staged out
-                // below (the S5-S7 pcm gates must still see them)
-                for (const c of cA) {
+                for (const c of canon) {
                     meta.kinds[KIND_NAMES.indexOf(c.kind)]++;
                     if (c.kind === 'pes' && c.dts >= 0) meta.pesDtsNonNeg++;
                     if (c.kind === 'pmt' && meta.firstPmt === null) meta.firstPmt = c.pmtEntries;
                     if (c.kind === 'pcm' && meta.firstPcm === null) meta.firstPcm = c;
-                    if (spec.recordA !== undefined) spec.recordA.push(c);
-                }
-                // staged-out kinds: drop from BOTH sides before the count
-                // check (a not-yet-ported kind exists on one side only),
-                // counting each dropped side-A event per excluded field
-                const keptA = [];
-                for (const c of cA) {
-                    if (kindStagedOut(c.kind)) countKindStagedOut(c.kind);
-                    else keptA.push(c);
-                }
-                const keptB = cB.filter((c) => !kindStagedOut(c.kind));
-                if (keptA.length !== keptB.length) {
-                    diverge(ctx, `event #${eventIdx} (feed #${feed} @ +${byteOff}B)`, 'feed event count', keptA.length, keptB.length);
-                }
-                for (let i = 0; i < keptA.length; i++) {
-                    compareEvents(keptA[i], keptB[i], ctx, `event #${eventIdx} (feed #${feed} @ +${byteOff}B)`);
-                    eventIdx++;
+                    if (spec.record !== undefined) spec.record.push(c);
+                    digestEvent(c, evH);
                 }
             } finally {
-                for (const e of evA) e.free();
-                for (const e of evB) e.free();
+                for (const e of evs) e.free();
             }
-            const sA = dA.debugSnapshot();
-            const sB = dB.debugSnapshot();
+            eventIdx += canon.length;
+            const s = d.debugSnapshot();
             try {
-                compareSnapshots(sA, sB, ctx, `snapshot #${snapIdx} (feed #${feed} @ +${byteOff}B)`);
-                if (spec.meter === true) {
-                    const mA = dA.meter_snapshot();
-                    const mB = dB.meter_snapshot();
+                digestSnapshot(s, ctx, `snapshot #${snapIdx} (feed #${feed} @ +${byteOff}B)`);
+                if (metered) {
+                    const m = d.meter_snapshot();
                     try {
-                        compareMeters(mA, mB, ctx, `meter #${meterIdx} (feed #${feed} @ +${byteOff}B)`);
+                        digestMeter(m, ctx);
                     } finally {
-                        mA.free();
-                        mB.free();
+                        m.free();
                     }
                     meterIdx++;
                 }
             } finally {
-                sA.free();
-                sB.free();
+                s.free();
             }
             snapIdx++;
-            byteOff += ca.length;
+            byteOff += chunk.length;
         }
-    } catch (e) {
-        if (e instanceof ParityError) {
-            if (spec.negative === true) return { id: spec.id, failed: true, at: e.message };
-            fail(`parity divergence — ${e.message}`);
-        }
-        throw e;
     } finally {
-        dA.free();
-        dB.free();
+        d.free();
         COUNTS.caseRuns++;
     }
+    const digests = { evDigest: evH.digest('hex'), snapDigest: ctx.snap.digest('hex') };
+    if (metered) digests.meterDigest = ctx.meter.digest('hex');
     return {
-        id: spec.id, failed: false, feeds: spec.chunks.length, bytes: byteOff, events: eventIdx,
-        snaps: snapIdx, meters: meterIdx, meta, watch,
-        digest: ctx.digest === null ? null : ctx.digest.digest('hex'),
+        id: spec.id, feeds: spec.chunks.length, bytes: byteOff, events: eventIdx,
+        snaps: snapIdx, meters: meterIdx, meta, watch, digests,
     };
 }
 
-// Side-A-only recorded canonical stream (chunk-boundary invariance §5.3,
-// C4 tail-append assert).
+// Recorded canonical stream (chunk-boundary invariance §5.3, C4
+// tail-append assert).
 function runStream(caseName, buf, size) {
-    const d = SRC_A.createDemuxer();
+    const d = SRC.createDemuxer();
     const out = [];
     try {
         for (const c of chunkList(buf, size)) {
@@ -725,10 +476,15 @@ function runStream(caseName, buf, size) {
 }
 
 function compareStreams(caseName, a, b) {
-    const ctx = { caseName, digest: null };
+    const ctx = { caseName };
     if (a.length !== b.length) diverge(ctx, 'stream end', 'event count', a.length, b.length);
     for (let i = 0; i < a.length; i++) {
-        compareEvents(a[i], b[i], ctx, `event #${i} (recorded stream)`);
+        try {
+            compareEvents(a[i], b[i], ctx, `event #${i} (recorded stream)`);
+        } catch (e) {
+            if (e instanceof ParityError) fail(`stream divergence — ${e.message}`);
+            throw e;
+        }
         COUNTS.streamCompares++;
     }
 }
@@ -769,12 +525,66 @@ const FIX = new Map();
 }
 const S1 = FIX.get('av_shortgop.ts');
 
-// ---- 2. sources -------------------------------------------------------------------
+// ---- 2. source + baseline ----------------------------------------------------------
 
-const SRC_A = await loadRustSource();
-const SRC_B = CPP ? await loadCppSource() : SRC_A; // §5.1 Rust-vs-Rust: one
-                      // pkg import, two instances. --cpp: side B = the port.
-pass(`side A = ${SRC_A.label}, side B = ${SRC_B === SRC_A ? 'side A' : SRC_B.label}`);
+const SRC = await loadSource();
+pass(`source = ${SRC.label}`);
+
+const BASELINE_FILE = join(HERE, 'fixtures/demux.baseline.json');
+const OLD_BASELINE = loadBaseline(BASELINE_FILE);
+if (!RECORD && OLD_BASELINE === null) {
+    fail(`no baseline at ${BASELINE_FILE} - record one first (node js/demux_parity.mjs --record)`);
+}
+if (OLD_BASELINE !== null && (typeof OLD_BASELINE.cases !== 'object' || OLD_BASELINE.cases === null)) {
+    fail(`${BASELINE_FILE}: malformed baseline (no cases object) - re-record with --record`);
+}
+const BASELINE_CASES = RECORD ? {} : OLD_BASELINE.cases;
+const NEW_CASES = RECORD ? {} : null;
+if (!RECORD) pass(`baseline = ${BASELINE_FILE} (${OLD_BASELINE.provenance})`);
+
+// The per-case baseline entry: counts gate the digests for sanity.
+function baselineEntry(r) {
+    const e = {
+        feeds: r.feeds, bytes: r.bytes, events: r.events, snaps: r.snaps, meters: r.meters,
+        kinds: r.meta.kinds,
+        evDigest: r.digests.evDigest,
+        snapDigest: r.digests.snapDigest,
+    };
+    if (r.digests.meterDigest !== undefined) e.meterDigest = r.digests.meterDigest;
+    return e;
+}
+
+// First mismatch only, §5.6 style: case id, field, run value vs baseline.
+function assertBaseline(caseId, r, entry) {
+    const run = baselineEntry(r);
+    const keys = new Set([...Object.keys(run), ...Object.keys(entry)]);
+    for (const f of keys) {
+        const a = run[f];
+        const b = entry[f];
+        if (a === undefined || b === undefined) {
+            throw new ParityError(`${caseId}: ${f}: ${a === undefined ? 'the run lacks it' : 'the baseline entry lacks it'} (stale baseline? re-record with --record)`);
+        }
+        if (JSON.stringify(a) !== JSON.stringify(b)) {
+            throw new ParityError(`${caseId}: ${f}: run ${shortVal(a)} vs baseline ${shortVal(b)}`);
+        }
+    }
+}
+
+const checkCase = (r) => {
+    if (RECORD) {
+        NEW_CASES[r.id] = baselineEntry(r);
+        return;
+    }
+    const entry = BASELINE_CASES[r.id];
+    if (entry === undefined) fail(`baseline has no entry for "${r.id}" (stale baseline? re-record with --record)`);
+    try {
+        assertBaseline(r.id, r, entry);
+    } catch (e) {
+        if (e instanceof ParityError) fail(`baseline divergence — ${e.message}`);
+        throw e;
+    }
+    COUNTS.baselineCases++;
+};
 
 // ---- 3. golden fixtures + crafted corruptions (§1/§2) + §4.3 selection passes ------
 
@@ -808,6 +618,7 @@ for (const [id, name] of FIXTURES) {
         }
     }
     reportCase(r);
+    checkCase(r);
 }
 
 const CORRUPTIONS = [
@@ -822,8 +633,9 @@ const CORRUPTIONS = [
     { id: 'C9 (S1 ++ S1 PTS jump)', chunks: chunkList(concatBuf(S1, S1)) },
 ];
 for (const c of CORRUPTIONS) {
-    const r = runCase({ id: c.id, chunks: c.chunks, watch: c.watch === true, recordA: c.record });
+    const r = runCase({ id: c.id, chunks: c.chunks, watch: c.watch === true, record: c.record });
     reportCase(r);
+    checkCase(r);
     if (c.id.startsWith('C4')) {
         // §2 C4 "(assert this)": leftover bytes are retained across feed()
         // calls - appending the missing tail surfaces the final packet's
@@ -836,19 +648,22 @@ for (const c of CORRUPTIONS) {
         pass(`C4 tail-append — 123 B retained in FeedBuf across feed() calls, stream identical to one-shot S1 (${oneShot.length} events)`);
     }
     if (c.id.startsWith('C6')) {
-        // §5.4 canonicalizer gate
+        // §5.4 canonicalizer gate (ported form, see header)
         const w = r.watch;
         if (w.errEvents < 1) fail('C6: no kind-4 error events');
-        if (w.errRawBad > 0) fail(`C6: ${w.errRawBad} raw error texts do not match ^ts parse: (InvalidInput|Unsupported|Other): … \\(at …:\\d+\\)$`);
+        if (w.errRawBad > 0) fail(`C6: ${w.errRawBad} raw error texts do not match ^ts parse: (InvalidInput|Unsupported|Other): …$`);
+        if (w.errAtBad > 0) fail(`C6: ${w.errAtBad} raw error texts carry the " (at …)" location suffix the port omits`);
         if (w.errCanonBad > 0) fail(`C6: ${w.errCanonBad} canonicalized texts still contain " (at "`);
-        pass(`C6 error-text canonicalizer — ${w.errEvents} kind-4 events, raw texts carry the (at …) suffix, canonical texts stripped`);
+        pass(`C6 error-text canonicalizer — ${w.errEvents} kind-4 events, raw texts in §4.1 form with no location suffix`);
     }
 }
 
 // §4.3: one extra pass per 302M fixture with setMeterSelection(pid, 1)
 // issued before the first feed (scope partner swap + spectrum on ch1).
 for (const [id, name] of FIXTURES.filter(([i]) => METER_FIXTURES.has(i))) {
-    reportCase(runCase({ id: `${id}-sel (meter ch1)`, chunks: chunkList(FIX.get(name)), meter: true, selection: [0x100, 1] }));
+    const r = runCase({ id: `${id}-sel (meter ch1)`, chunks: chunkList(FIX.get(name)), meter: true, selection: [0x100, 1] });
+    reportCase(r);
+    checkCase(r);
 }
 
 // ---- 4. chunk-boundary invariance (§5.3) --------------------------------------------
@@ -866,38 +681,63 @@ for (const [id, name] of FIXTURES) {
 // ---- 5. wall-clock isolation (§5.5) ---------------------------------------------------
 
 {
-    const run1 = runCase({ id: 'wall-clock run 1 (S1)', chunks: chunkList(S1), digest: true });
-    const run2 = runCase({ id: 'wall-clock run 2 (S1)', chunks: chunkList(S1), digest: true });
-    if (run1.digest !== run2.digest) {
-        fail(`two S1 runs produced different canonical digests (${run1.digest.slice(0, 16)}… vs ${run2.digest.slice(0, 16)}…) — a compared field leaks wall time`);
+    const run1 = runCase({ id: 'wall-clock run 1 (S1)', chunks: chunkList(S1) });
+    const run2 = runCase({ id: 'wall-clock run 2 (S1)', chunks: chunkList(S1) });
+    for (const k of new Set([...Object.keys(run1.digests), ...Object.keys(run2.digests)])) {
+        if (run1.digests[k] !== run2.digests[k]) {
+            fail(`two S1 runs produced different ${k} (${shortVal(run1.digests[k])} vs ${shortVal(run2.digests[k])}) — a digested field leaks wall time`);
+        }
     }
-    pass(`wall-clock isolation — S1 run twice, identical canonical digest (${run1.digest.slice(0, 16)}…)`);
+    // Both reruns must also match the recorded S1 entry (gate mode: the
+    // committed file; record mode: the entry captured this run).
+    try {
+        assertBaseline('wall-clock rerun (S1)', run1, (RECORD ? NEW_CASES : BASELINE_CASES)['S1']);
+    } catch (e) {
+        if (e instanceof ParityError) fail(`baseline divergence — ${e.message}`);
+        throw e;
+    }
+    pass(`wall-clock isolation — S1 run twice, identical canonical digests (${run1.digests.evDigest.slice(0, 16)}…), both matching the baseline`);
 }
 
-// ---- 6. negative control (the comparator must be able to FAIL) ------------------------
+// ---- 6. negative control (the gate must be able to FAIL) ------------------------------
 
 {
-    const neg = runCase({
-        id: 'negative (S4 vs S1)',
-        chunks: chunkList(FIX.get('a_aac.ts')),
-        chunksB: chunkList(S1),
-        negative: true,
-    });
-    if (!neg.failed) fail('negative control (side A fed a_aac, side B fed av_shortgop) did NOT diverge — comparator cannot fail');
-    if (!/event #\d+ \(feed #\d+ @ \+\d+B\): [^:]+: A=.+ B=/.test(neg.at)) fail(`negative control report malformed: ${neg.at}`);
-    pass(`negative control — comparator flagged: ${neg.at}`);
+    // Honest S4 run vs its own baseline entry with ONE digest tampered in
+    // memory: the comparison must flag exactly that digest.
+    const r = runCase({ id: 'S4 (negative control input)', chunks: chunkList(FIX.get('a_aac.ts')) });
+    const tampered = JSON.parse(JSON.stringify((RECORD ? NEW_CASES : BASELINE_CASES)['S4']));
+    tampered.evDigest = (tampered.evDigest[0] === '0' ? '1' : '0') + tampered.evDigest.slice(1);
+    let msg = null;
+    try {
+        assertBaseline('negative (S4 vs tampered baseline)', r, tampered);
+    } catch (e) {
+        if (e instanceof ParityError) msg = e.message;
+        else throw e;
+    }
+    if (msg === null) fail('negative control (S4 vs its own baseline with evDigest tampered in memory) did NOT diverge — the gate cannot fail');
+    if (!/^negative \(S4 vs tampered baseline\): evDigest: run [0-9a-f]{16}… vs baseline [0-9a-f]{16}…$/.test(msg)) {
+        fail(`negative control report malformed: ${msg}`);
+    }
+    pass(`negative control — baseline comparison flagged: ${msg}`);
 }
 
-// ---- 7. summary ------------------------------------------------------------------------
+// ---- 7. record / summary ----------------------------------------------------------------
 
-const exclSummary = EXCLUDED_COUNTS.size === 0
-    ? 'staged exclusions: none'
-    : `staged exclusions (TEMPORARY): ${[...EXCLUDED_COUNTS].map(([k, n]) => `${k}=${n} skipped`).join(', ')}`;
+if (RECORD) {
+    reportBaselineDrift(BASELINE_FILE, OLD_BASELINE, NEW_CASES);
+    const prov = baselineProvenance('harness/ts_demux', currentCommit());
+    writeBaseline(BASELINE_FILE, prov, NEW_CASES);
+    console.log(`demux_parity: recorded ${Object.keys(NEW_CASES).length} cases -> ${BASELINE_FILE}`);
+    console.log(`  provenance: ${prov}`);
+    process.exit(0);
+}
+
 console.log(
-    `demux_parity: PASS — ${SRC_A.label} vs ${SRC_B === SRC_A ? 'itself' : SRC_B.label}: ` +
+    `demux_parity: PASS — ${SRC.label} vs ${BASELINE_FILE}: ` +
     `${COUNTS.caseRuns} case runs (10 fixtures + 9 corruptions + 3 selection passes + 2 wall-clock + 1 negative), ` +
-    `${COUNTS.eventPairs} event pairs compared (${COUNTS.eventFields} canonical fields; ${COUNTS.streamCompares} pairs in recorded-stream checks), ` +
-    `${COUNTS.snaps} debug snapshots (${COUNTS.snapFields} fields exact, ${COUNTS.wallClock} wall-clock values checked finite-only per §4.2), ` +
-    `${COUNTS.meters} meter snapshots (${COUNTS.meterFields} fields), ${exclSummary}`,
+    `${COUNTS.baselineCases} cases matched the baseline, ` +
+    `${COUNTS.events} events digested (${COUNTS.eventFields} canonical fields; ${COUNTS.streamCompares} pairs in recorded-stream checks), ` +
+    `${COUNTS.snaps} debug snapshots (${COUNTS.snapFields} fields digested, ${COUNTS.wallClock} wall-clock values checked finite-only per §4.2), ` +
+    `${COUNTS.meters} meter snapshots (${COUNTS.meterFields} fields digested)`,
 );
 process.exit(0);

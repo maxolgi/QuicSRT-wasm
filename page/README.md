@@ -192,8 +192,8 @@ with the vendored `formatPubStats`).
 All against the supervised C++ gateway (`dist/` via
 `./build.sh page && ./build.sh deploy`; `browsertest` from the supervised
 testpub). Node gates first, all exit 0: `js/test_contract.mjs`,
-`js/demux_parity.mjs` (rust-rust and `--cpp --m5-stage meter`),
-`js/muxer_parity.mjs` (rust-rust and `--cpp`), `page/ab_smoke.mjs`.
+`js/demux_parity.mjs`, `js/muxer_parity.mjs` (golden-baseline gates vs
+`js/fixtures/*.baseline.json`), `page/ab_smoke.mjs`.
 
 - Player (`/?stream=browsertest`): `crossOriginIsolated === true`, canvas
   640x360 animating (two full-frame pixel sums 2 s apart differ:

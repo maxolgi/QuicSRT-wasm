@@ -1,0 +1,385 @@
+{
+  "provenance": "recorded from harness/ts_demux at commit 42c99914ae7a191838f042d4aef98978ad9166d4, byte-parity vs the Rust oracle verified at that commit",
+  "cases": {
+    "S1": {
+      "feeds": 204,
+      "bytes": 229548,
+      "events": 299,
+      "snaps": 204,
+      "meters": 0,
+      "kinds": [
+        54,
+        54,
+        167,
+        24,
+        0,
+        0
+      ],
+      "evDigest": "0e14696df8c545c30153849b753cd2eb494c7fd61a9925429702750acf11d74b",
+      "snapDigest": "f32b1eb0a146a99249929d26f05ce9979afddf6d9fbb5635f55470a5770256fd"
+    },
+    "S2": {
+      "feeds": 417,
+      "bytes": 469812,
+      "events": 503,
+      "snaps": 417,
+      "meters": 0,
+      "kinds": [
+        101,
+        101,
+        299,
+        2,
+        0,
+        0
+      ],
+      "evDigest": "9b8e40b0e4bbe8b7ab1884ce9ec01533e841981157bf6b1adfdc2d54b367a0dc",
+      "snapDigest": "e4ff27c26b0fb56471257364b4792722289e82ea958af1ee3d60ad433c75bf63"
+    },
+    "S3": {
+      "feeds": 150,
+      "bytes": 169012,
+      "events": 254,
+      "snaps": 150,
+      "meters": 0,
+      "kinds": [
+        51,
+        51,
+        149,
+        3,
+        0,
+        0
+      ],
+      "evDigest": "6bf095cb12e13249220297e3eea985dcb6939a75c9a19cebc454be5bf81566f3",
+      "snapDigest": "5b91cff16a1151605bb0a7b16b149efeb12dd28bcb89d02182e84127a09851ed"
+    },
+    "S4": {
+      "feeds": 37,
+      "bytes": 40796,
+      "events": 48,
+      "snaps": 37,
+      "meters": 0,
+      "kinds": [
+        12,
+        12,
+        12,
+        12,
+        0,
+        0
+      ],
+      "evDigest": "ac1b126b8f7946f20ad6e60dc38b6fcd712f2f7da2f259806aec9a65a7d981b2",
+      "snapDigest": "6fe2c0ed0e90e45b8c27dd1623ee71f9e4119155c56b65b74516bc7d05b5281d"
+    },
+    "S5": {
+      "feeds": 445,
+      "bytes": 501584,
+      "events": 320,
+      "snaps": 445,
+      "meters": 445,
+      "kinds": [
+        19,
+        19,
+        94,
+        94,
+        0,
+        94
+      ],
+      "evDigest": "68c6d1e6e2722050858010181d084f188a88e2077bc351e93a3a1f524599eaf0",
+      "snapDigest": "d924ac74c25884c6eb78af32ea056ad37e7dacfc4c8944a04abaf93cbf53c1d8",
+      "meterDigest": "50498858dc38f151c397cfb3af1a1f175bd1c382193f9e909c0972d0f6c3e364"
+    },
+    "S6": {
+      "feeds": 632,
+      "bytes": 712896,
+      "events": 320,
+      "snaps": 632,
+      "meters": 632,
+      "kinds": [
+        19,
+        19,
+        94,
+        94,
+        0,
+        94
+      ],
+      "evDigest": "559f634ac6f83191d3323316702f81e5ae1ad4503f2d65055b9679c2048f8a30",
+      "snapDigest": "c45d829101e5a2d21f466800d0f5ed8054ca0b0b313cde401e3f8bec8bdb4afc",
+      "meterDigest": "0725f965c01944bd52db7c0e1d21e7f7ac8ffb12ca4c4081f1bd30ee856a4c0f"
+    },
+    "S7": {
+      "feeds": 1389,
+      "bytes": 1566040,
+      "events": 243,
+      "snaps": 1389,
+      "meters": 1389,
+      "kinds": [
+        15,
+        15,
+        71,
+        71,
+        0,
+        71
+      ],
+      "evDigest": "5f6f679c7521cd125968930a2ad6a1ac168bfdc4657984eeccc12dc8f0b2450d",
+      "snapDigest": "7a82eaac0749f50d46054aa6a64eacef76bf0cccb71fa0e25171255ec8607fdb",
+      "meterDigest": "daf3718b24277817a052c7cba7f779e8fb534e11493e2587f1619ae7ac06d4cd"
+    },
+    "S8": {
+      "feeds": 132,
+      "bytes": 148896,
+      "events": 136,
+      "snaps": 132,
+      "meters": 0,
+      "kinds": [
+        30,
+        30,
+        74,
+        2,
+        0,
+        0
+      ],
+      "evDigest": "229f5e0888f9b203fc9ac2bdd021c164263c94a25aa8d8f170e32c2e52e1cbf1",
+      "snapDigest": "6cbcaa3cef093b8349f018b66c1a319f3a9f34615c219162b30c23a421168eea"
+    },
+    "S9": {
+      "feeds": 84,
+      "bytes": 94000,
+      "events": 131,
+      "snaps": 84,
+      "meters": 0,
+      "kinds": [
+        27,
+        27,
+        74,
+        3,
+        0,
+        0
+      ],
+      "evDigest": "fd7999ab194ea105c374a96787f030320f404e6fc7422467761f8843b66dbc67",
+      "snapDigest": "636e2d744916105342c9dce3c92ae82989a14a55decbcf4fba7c7766ca894fce"
+    },
+    "S10": {
+      "feeds": 84,
+      "bytes": 94000,
+      "events": 131,
+      "snaps": 84,
+      "meters": 0,
+      "kinds": [
+        27,
+        27,
+        74,
+        3,
+        0,
+        0
+      ],
+      "evDigest": "78b58f69d95ea0a0fe0b3a559696deaffccf9840b39656a7c3f377e6318f3eac",
+      "snapDigest": "5d575b0865342977e01ab6e0582c99e1e1d1086c8824755f4ef13ce7672556fd"
+    },
+    "C1 (S1 TEI)": {
+      "feeds": 204,
+      "bytes": 229548,
+      "events": 299,
+      "snaps": 204,
+      "meters": 0,
+      "kinds": [
+        54,
+        54,
+        167,
+        24,
+        0,
+        0
+      ],
+      "evDigest": "0e14696df8c545c30153849b753cd2eb494c7fd61a9925429702750acf11d74b",
+      "snapDigest": "d8d75ed71f2433794d4c230973b8d6043c6c1554b915d279c529ecc4ed95d5d0"
+    },
+    "C2 (S1 CC break)": {
+      "feeds": 204,
+      "bytes": 229548,
+      "events": 299,
+      "snaps": 204,
+      "meters": 0,
+      "kinds": [
+        54,
+        54,
+        167,
+        24,
+        0,
+        0
+      ],
+      "evDigest": "0e14696df8c545c30153849b753cd2eb494c7fd61a9925429702750acf11d74b",
+      "snapDigest": "ef01fe139c50d9477ec90bc9d74ac58bfc15c00f7f258fdc273516d02eac71d6"
+    },
+    "C3 (S1 CC break + discontinuity)": {
+      "feeds": 204,
+      "bytes": 229548,
+      "events": 299,
+      "snaps": 204,
+      "meters": 0,
+      "kinds": [
+        54,
+        54,
+        167,
+        24,
+        0,
+        0
+      ],
+      "evDigest": "0e14696df8c545c30153849b753cd2eb494c7fd61a9925429702750acf11d74b",
+      "snapDigest": "ce528bace01dc77e112dff1e7891c6a735ce5bbac215ec133830004fd0747d2c"
+    },
+    "C4 (S1 truncated 123 B, then tail)": {
+      "feeds": 2,
+      "bytes": 229548,
+      "events": 299,
+      "snaps": 2,
+      "meters": 0,
+      "kinds": [
+        54,
+        54,
+        167,
+        24,
+        0,
+        0
+      ],
+      "evDigest": "0e14696df8c545c30153849b753cd2eb494c7fd61a9925429702750acf11d74b",
+      "snapDigest": "eae0f79abaabf07290e0804243820f4fc07169f82dd3ebb10b91d61b86af84db"
+    },
+    "C5 (S1 join @ packet 200)": {
+      "feeds": 171,
+      "bytes": 191948,
+      "events": 243,
+      "snaps": 171,
+      "meters": 0,
+      "kinds": [
+        44,
+        44,
+        136,
+        19,
+        0,
+        0
+      ],
+      "evDigest": "8dc581f6aa532717468e710078b495dc3fcbc7cf470e672e0cf83f4b35d67f09",
+      "snapDigest": "7178abee68b5a90b1b1ff95ad45f5961aca865e59d8ab933ec8fdc12bf8acdfa"
+    },
+    "C6 (S1 misaligned @ 188*200+1)": {
+      "feeds": 171,
+      "bytes": 191947,
+      "events": 430,
+      "snaps": 171,
+      "meters": 0,
+      "kinds": [
+        44,
+        44,
+        136,
+        19,
+        187,
+        0
+      ],
+      "evDigest": "b0b783523c5eae76af1d3e955fb0117836df0994a40c398b620581ea09387733",
+      "snapDigest": "91d87717f2b0184a5ff21df39bb71ac9ea8423937cdf94f7f0283628cc8af96d"
+    },
+    "C7 (S1 null span [10,60))": {
+      "feeds": 204,
+      "bytes": 229548,
+      "events": 283,
+      "snaps": 204,
+      "meters": 0,
+      "kinds": [
+        51,
+        51,
+        157,
+        24,
+        0,
+        0
+      ],
+      "evDigest": "f3407878a582d315dc9f29862d9483aa87f5a02cc8815fc5cdf38e3d71593606",
+      "snapDigest": "8a1a89266c2561321cb5230218763c44a2b549ecf12e191e153b14422e8f3077"
+    },
+    "C8 (S1 ++ S10 PAT/PMT republish)": {
+      "feeds": 287,
+      "bytes": 323548,
+      "events": 430,
+      "snaps": 287,
+      "meters": 0,
+      "kinds": [
+        81,
+        81,
+        241,
+        27,
+        0,
+        0
+      ],
+      "evDigest": "9a7dbef676cdf9a626ab034e525a7124c7468139b65f33e9dd6c8b434ef7b26c",
+      "snapDigest": "91103d2a00832d12f9362a75487be205e9ebd0325ed926a786bcb49d51fbe07f"
+    },
+    "C9 (S1 ++ S1 PTS jump)": {
+      "feeds": 407,
+      "bytes": 459096,
+      "events": 599,
+      "snaps": 407,
+      "meters": 0,
+      "kinds": [
+        108,
+        108,
+        335,
+        48,
+        0,
+        0
+      ],
+      "evDigest": "ee5bc6776014a38e49de5b5f6d8e8d4f6ab439daf16cea3a02bf207ea792972d",
+      "snapDigest": "9e7faa4ed54dcebc80417f498aa9bc4ed5cef7bdd183b75f1be319a15348a121"
+    },
+    "S5-sel (meter ch1)": {
+      "feeds": 445,
+      "bytes": 501584,
+      "events": 320,
+      "snaps": 445,
+      "meters": 445,
+      "kinds": [
+        19,
+        19,
+        94,
+        94,
+        0,
+        94
+      ],
+      "evDigest": "68c6d1e6e2722050858010181d084f188a88e2077bc351e93a3a1f524599eaf0",
+      "snapDigest": "d924ac74c25884c6eb78af32ea056ad37e7dacfc4c8944a04abaf93cbf53c1d8",
+      "meterDigest": "62df56e0195208be91643af5b8c3d29a6d3399e3ae5a30af3c1ef9992d6f5bdd"
+    },
+    "S6-sel (meter ch1)": {
+      "feeds": 632,
+      "bytes": 712896,
+      "events": 320,
+      "snaps": 632,
+      "meters": 632,
+      "kinds": [
+        19,
+        19,
+        94,
+        94,
+        0,
+        94
+      ],
+      "evDigest": "559f634ac6f83191d3323316702f81e5ae1ad4503f2d65055b9679c2048f8a30",
+      "snapDigest": "c45d829101e5a2d21f466800d0f5ed8054ca0b0b313cde401e3f8bec8bdb4afc",
+      "meterDigest": "ed93b4b6de1eb3e42c0aadcb24a68167d5fcbfd905d1b3d3ead70bb056fce338"
+    },
+    "S7-sel (meter ch1)": {
+      "feeds": 1389,
+      "bytes": 1566040,
+      "events": 243,
+      "snaps": 1389,
+      "meters": 1389,
+      "kinds": [
+        15,
+        15,
+        71,
+        71,
+        0,
+        71
+      ],
+      "evDigest": "5f6f679c7521cd125968930a2ad6a1ac168bfdc4657984eeccc12dc8f0b2450d",
+      "snapDigest": "7a82eaac0749f50d46054aa6a64eacef76bf0cccb71fa0e25171255ec8607fdb",
+      "meterDigest": "777ae32ef0bd048250c4223c6a067e27fb576b3d14b18d3dbad3bfc92c5d2377"
+    }
+  }
+}
