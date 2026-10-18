@@ -150,7 +150,7 @@ testpub). Node gates first, all exit 0: `js/test_contract.mjs`,
 - Record 20 s with the patched ffmpeg (live hash via `cert_hash_file`,
   the testpub script's pattern - the hash rotates per gateway boot):
 
-      /home/flibb/maxolgi/WebSRT-cpp/libwebsrt/deps/ffmpeg/ffmpeg \
+      ../libwebsrt/deps/ffmpeg/ffmpeg \
         -f mpegts -i "websrt://127.0.0.1:4435?stream=m6verA&cert_hash_file=/tmp/opencode/m6-cert-hash.js" \
         -c copy -t 20 -y /tmp/opencode/m6_cpp.ts
 
