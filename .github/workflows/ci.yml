@@ -52,7 +52,58 @@ jobs:
           node js/muxer_parity.mjs
           node js/engine_smoke.mjs
       - name: Upload dist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
+
+  # Publish a GitHub Release for every successful master build, like
+  # websrt-gateway-cpp's ci (and WebSRT's build.yml before it): master
+  # push -> dev-<short_sha> marked latest (must NOT be a prerelease -
+  # GitHub ignores make_latest on pre-releases, losing the Latest badge
+  # and /releases/latest); v* tag push -> stable release tagged
+  # <version>. The dist tree rides as websrt-wasm-dist.zip with its
+  # contents at the zip root (unzip -d <web_root>), the same shape as
+  # WebSRT's websrt-web-dist.zip asset the gateway fetches.
+  release:
+    needs: build-dist
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: artifacts/dist
+      - name: Stage release asset
+        run: |
+          mkdir -p release
+          (cd artifacts/dist && zip -q -r "$GITHUB_WORKSPACE/release/websrt-wasm-dist.zip" .)
+          unzip -l release/websrt-wasm-dist.zip
+      - name: Set release metadata
+        id: meta
+        env:
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+        run: |
+          short="${SHA:0:7}"
+          if [[ "$REF" == refs/tags/v* ]]; then
+            echo "tag=${REF#refs/tags/}"    >> "$GITHUB_OUTPUT"
+            echo "name=${REF#refs/tags/}"   >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=dev-${short}"         >> "$GITHUB_OUTPUT"
+            echo "name=Dev ${short}"        >> "$GITHUB_OUTPUT"
+          fi
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          prerelease: false
+          make_latest: true
+          files: release/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

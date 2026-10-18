@@ -19,7 +19,9 @@ gates now pin the port to the committed golden baselines, standalone.
   serves as web_root (needs page)
 - CI (`.github/workflows/ci.yml`) — the full chain + the node gates on
   GitHub Actions (ubuntu-24.04, emsdk 6.0.8 at ~/emsdk); uploads dist/
-  as a workflow artifact
+  as a workflow artifact and publishes `websrt-wasm-dist.zip` as a
+  GitHub release on master pushes (`dev-<short_sha>`, latest) and `v*`
+  tags (stable)
 - Node gates (exit 0 = pass):
   - `node js/test_contract.mjs` — engine wrapper contract (the in-wasm
     synthetic publisher)
