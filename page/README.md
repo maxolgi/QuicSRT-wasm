@@ -186,3 +186,73 @@ with the vendored `formatPubStats`).
   pre-bundled `/bundle/publish_worker.js` instead of vite's
   `new URL('./stream-worker.ts')` (the same delta as the player's
   `workerUrl`).
+
+## M6 verification (2026-10-17, gateway-served, live)
+
+All against the supervised C++ gateway (`dist/` via
+`./build.sh page && ./build.sh deploy`; `browsertest` from the supervised
+testpub). Node gates first, all exit 0: `js/test_contract.mjs`,
+`js/demux_parity.mjs` (rust-rust and `--cpp --m5-stage meter`),
+`js/muxer_parity.mjs` (rust-rust and `--cpp`), `page/ab_smoke.mjs`.
+
+- Player (`/?stream=browsertest`): `crossOriginIsolated === true`, canvas
+  640x360 animating (two full-frame pixel sums 2 s apart differ:
+  145717350 vs 145855757), stats ticking across a 30 s watch with zero
+  loss; the session later ran 20 min continuously (140.0 MB rx, loss 0).
+  GPU-less box: hardware decode produced no frames silently - the page's
+  own `prefer-software` toggle (`localStorage["websrt-hw-mode"]`) makes it
+  decode; player verification used it.
+- Publisher (`/publish.html?source=canvas`, foreground tab): stream
+  `m6verA`, canvas 1280x720 H.264 (`avc1.640028`), 30 fps while the tab is
+  foregrounded, `SRT handshake complete` instantly, LIVE alongside a
+  concurrently streaming player tab. Background tabs throttle the canvas
+  rAF to ~1 fps, which starves late joiners of keyframes (see below) -
+  keep the publisher foregrounded while testing.
+- Record 20 s with the patched ffmpeg (live hash via `cert_hash_file`,
+  the testpub script's pattern - the hash rotates per gateway boot):
+
+      /home/flibb/maxolgi/WebSRT-cpp/libwebsrt/deps/ffmpeg/ffmpeg \
+        -f mpegts -i "websrt://127.0.0.1:4435?stream=m6verA&cert_hash_file=/tmp/opencode/m6-cert-hash.js" \
+        -c copy -t 20 -y /tmp/opencode/m6_cpp.ts
+
+  (`m6-cert-hash.js` is a fresh `curl -sk https://127.0.0.1:8443/cert-hash.js`
+  capture; `cert_hash=HEX` also works, bare hex - no `0x` prefix.) The
+  command consumed the live stream and wrote a valid 1.5 MB / 9.0 s file,
+  then stalled in ffmpeg's live `-c copy` remux (its h264 parser reports
+  `non-existing PPS` mid-GOP and stops emitting; the same bytes parse
+  flawlessly offline - see ffprobe below). The full-20 s raw wire capture
+  via the sibling repo's `websrt-dump` (same libwebsrt subscriber):
+  3349784 B / 20.2 s / 3234 messages, lost 0 rtx 0 dropped 0, rate
+  1.41 mbps.
+- ffprobe (`-v error`, zero errors) on the raw 20 s capture: one stream -
+  `h264` 1280x720 High, `r_frame_rate` = `avg_frame_rate` = 30000/1001,
+  duration 19.905633 s, matching the page's audio=`(none)` (video only).
+  In-band PSI is healthy: 15 PAT + 15 PMT + 15 IDR/SPS/PPS keyframe bursts
+  in the window (the muxer re-emits PSI on every keyframe, every ~2 s at
+  30 fps).
+- Playback: `/?stream=m6verA` in a second tab, 21.9 s connected,
+  `crossOriginIsolated === true`, canvas 1280x720 animating (pixel sums
+  526202890 vs 526157251), rx 662 msg, loss 0 - while the publisher tab
+  and a third browsertest player session kept running.
+- TX stats while publishing (page line, 6 s apart): `LIVE ... sent:
+  83.2 MB` -> `83.3 MB`, loss 0 (the `↑` number is SRT link bandwidth
+  estimate, not throughput - same semantic as the player's `bw`).
+- Gateway `/stats` corroboration: `m6verA alive viewers 2` with the
+  publisher session at 77420 messages received and both viewer sessions
+  tx_data advancing; `browsertest` untouched alongside.
+
+Fixes that made the multi-tab case pass (this commit):
+
+- `js/pthread_spawn_guard.js` (installed by `js/engine_module.js` before
+  the module import): Chrome 151 cancels nested pthread module-worker
+  script loads (a bare `error` Event, `net::ERR_ABORTED`) once other busy
+  engine workers share the renderer - same-origin COOP/COEP tabs share one
+  process, so a streaming player tab aborted 3-of-4 publisher pthread
+  spawns, and emscripten's rethrow killed the worker mid-handshake. The
+  guard tees pre-ready postMessages, retries aborted loads on a fresh
+  worker with exponential backoff, and replays the tee (pass-through on
+  the happy path - deferring delivery would deadlock the load handshake).
+- `js/engine_module.js` also routes the engine's `printErr` through a
+  `SRT.br` filter in the browser: srt's "CRcvBuffer.readMessage()" warning
+  flood (hundreds per second under load) is one console round-trip each
+  and amplifies the renderer contention; Node keeps the raw stream.
