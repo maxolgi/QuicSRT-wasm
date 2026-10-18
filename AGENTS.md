@@ -17,6 +17,9 @@ gates now pin the port to the committed golden baselines, standalone.
   (needs engine)
 - `./build.sh deploy` — assemble the self-contained dist/ the gateway
   serves as web_root (needs page)
+- CI (`.github/workflows/ci.yml`) — the full chain + the node gates on
+  GitHub Actions (ubuntu-24.04, emsdk 6.0.8 at ~/emsdk); uploads dist/
+  as a workflow artifact
 - Node gates (exit 0 = pass):
   - `node js/test_contract.mjs` — engine wrapper contract (the in-wasm
     synthetic publisher)

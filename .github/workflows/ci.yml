@@ -1,0 +1,58 @@
+# CI for websrt-wasm-cpp: build the full dist/ tree the gateway serves
+# (setup -> lib -> engine -> page -> deploy) and run the node gate suite
+# (AGENTS.md). The assembled dist/ is uploaded as a workflow artifact.
+
+name: ci
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref (same as libwebsrt's ci).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-dist:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Emscripten
+        # build.sh sources ~/emsdk/emsdk_env.sh, so emsdk must live at
+        # exactly that path. 6.0.8 is the toolchain the port was built
+        # and byte-parity-verified with.
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install 6.0.8
+          "$HOME/emsdk/emsdk" activate 6.0.8
+      - name: Setup (deps/libwebsrt + nested deps/srt)
+        run: ./build.sh setup
+      - name: Build libwebsrt receiver-only + srt (Emscripten)
+        run: ./build.sh lib
+      - name: Build engine
+        run: ./build.sh engine
+      - name: Install esbuild
+        run: npm ci
+      - name: Bundle pages
+        run: ./build.sh page
+      - name: Assemble dist/
+        run: ./build.sh deploy
+      - name: Node gates
+        # exit 0 = pass; engine_smoke drives the freshly built engine
+        # end-to-end through a fake WebTransport (2000 messages,
+        # byte-identical delivery + stats/bucket accounting).
+        run: |
+          node js/test_contract.mjs
+          node js/demux_parity.mjs
+          node js/muxer_parity.mjs
+          node js/engine_smoke.mjs
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
