@@ -6,16 +6,18 @@ vendored WebSRT player SDK (byte-identical to WebSRT @ 854c25c except the
 one engine-swap line in `worker.ts`); `page/wasm` is a symlink to
 WebSRT/web/wasm (the built demuxer wasm pkgs - read-only reference).
 
-- Serve: `./build.sh engine && ./build.sh page && node page/serve.mjs`
-- Rust-gateway cross-check (M6): second instance on another port, pinning
-  the Rust gateway's boot-time hash file (it has no web port) instead of
-  the C++ proxy: `PORT=8098 WEBSRT_CERT_HASH_FILE=/home/flibb/maxolgi/WebSRT/web/public/cert-hash.js node page/serve.mjs`
-  (also `WEBSRT_CERT_HASH_PROXY=<url>` to proxy another loopback gateway)
-- Open: `http://localhost:8099/?stream=test` (localhost is a secure context;
-  COOP/COEP headers come from serve.mjs - the emcc engine needs pthreads)
-- Gateway: the local `websrt-cpp` supervisord service (WT udp 4435, web
-  https://127.0.0.1:8443). serve.mjs proxies `/cert-hash.js` from it (fresh
-  hash each boot); `?host=`/`?port=`/`?stream=` override.
+- Serve: `./build.sh engine && ./build.sh page && ./build.sh deploy` — the
+  supervised gateway serves `dist/` as its web_root
+- Open: `https://127.0.0.1:8443/?stream=browsertest` (self-signed cert —
+  accept it; COOP/COEP headers come from the gateway - the emcc engine
+  needs pthreads)
+- Gateway: the supervised `websrt-cpp` service (WT udp 4435, SRT ingest
+  9102, web https://127.0.0.1:8443, health 127.0.0.1:9292; see AGENTS.md).
+  It serves `/cert-hash.js` same-origin (fresh hash each boot);
+  `?host=`/`?port=`/`?stream=` override.
+- Rust-vs-C++ cross-check: the A/B harness below runs both engine arms
+  through the same gateway (the Rust wasm pkg runs client-side) — the
+  Rust sibling gateway (4433/9000/9091, no web port) is not needed for it.
 - Decode: `?decode=software|hardware` seeds the hw/sw WebCodecs preference
   (localStorage `websrt-hw-mode`); the `decode: hw/sw` button above the
   stats line flips it (page reloads). Software-only machines need software.
@@ -122,10 +124,10 @@ backstop that still catches it.
 
 Runbook:
 
-    ./build.sh engine && ./build.sh page && node page/serve.mjs   # :8099
+    ./build.sh engine && ./build.sh page && ./build.sh deploy
     # terminal 2 - publish a stream (SRT ingest 9102, streamid = stream name):
     ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -c:v libx264 -preset veryfast -b:v 1M -f mpegts "srt://127.0.0.1:9102?streamid=ab&mode=caller&latency=120"
-    # browser: http://localhost:8099/ab.html?stream=ab&latency=120
+    # browser: https://127.0.0.1:8443/ab.html?stream=ab&latency=120
     #   START -> both engines subscribe concurrently
     #   wait >= 30 s (watch the live rtt/delivered line per engine)
     #   STOP  -> results table + COMPARE verdict
@@ -136,8 +138,8 @@ ab worker end-to-end against the C++ engine over a fake WebTransport
 (js/test_contract.mjs's in-wasm publisher; verifies 2000 messages delivered
 byte-identical with the exact full-run digest), and checks the verdict
 computation. `page/build` (symlink -> ../build) exists so node resolves the
-bundles' external `../build/srt_engine.mjs` the way serve.mjs maps `/build/`
-for the browser.
+bundles' external `../build/srt_engine.mjs` the same way `./build.sh deploy`
+maps it to `dist/build/` for the browser.
 
 ## M6 publisher page (`/publish.html`)
 
@@ -155,10 +157,12 @@ rides a transferred `audio-port` from the vendored `AudioGraphManager`,
 `handshakeComplete`/`close`/`wtClosed`/`stats` come back (stats rendered
 with the vendored `formatPubStats`).
 
-- Serve/run: same as the player (`./build.sh page && node page/serve.mjs`),
-  open `http://localhost:8099/publish.html`, Capture (getUserMedia), then
-  Publish. Round-trip check: the viewer link (or the M3 player with the
-  same `?stream=` name) plays it back.
+- Serve/run: same as the player (`./build.sh page && ./build.sh deploy`),
+  open `https://127.0.0.1:8443/publish.html` (or
+  `https://127.0.0.1:8443/publish.html?source=canvas` for the no-camera
+  mode below), Capture (getUserMedia), then Publish. Round-trip check:
+  the viewer link (or the M3 player with the same `?stream=` name) plays
+  it back.
 - `?source=canvas` (automated-gate / no-camera mode, M6 step 5 enabler):
   replaces the getUserMedia capture with an animated canvas test pattern
   (crawling color bars + counting timestamp + per-run id) via

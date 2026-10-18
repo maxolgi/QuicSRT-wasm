@@ -3,8 +3,9 @@
      the same live WebSRT stream, one WebTransport session + module worker
      each. Byte-level comparison of what each engine DELIVERED (SHA-256 of
      concatenated payload + per-second buckets) plus per-engine SRT stats.
-     Serve with page/serve.mjs (COOP/COEP everywhere - the C++ engine uses
-     pthreads). ?stream=&latency=&host=&port= like the player. -->
+     Served by the websrt-cpp gateway from dist/ (./build.sh deploy;
+     COOP/COEP everywhere - the C++ engine uses pthreads).
+     ?stream=&latency=&host=&port= like the player. -->
 <html>
 <head>
     <meta charset="utf-8">

@@ -10,9 +10,9 @@
 // log instead of the preact debug panel, no stream-back player
 // (the viewer link points at the M3 player), and a publish URL input
 // (wt://host:port shorthand, default the local websrt-cpp gateway) instead
-// of ?host=/?port=/window.WT_PORT resolution. cert-hash.js is proxied by
-// serve.mjs; window.CERT_HASH pins the WT session exactly as in WebSRT
-// (null hash = PKI mode, no pinning).
+// of ?host=/?port=/window.WT_PORT resolution. cert-hash.js is served
+// same-origin by the gateway; window.CERT_HASH pins the WT session exactly
+// as in WebSRT (null hash = PKI mode, no pinning).
 import type { PublishCmd, PublishMsg, EncodeStats } from './vendor/stream-worker';
 import type { StatsMsg } from './vendor/worker';
 import {
@@ -331,7 +331,7 @@ publishBtn.addEventListener('click', async () => {
         await audio.resumeIfSuspended();
     }
 
-    // Cert hash (cert-hash.js via serve.mjs; null = PKI, no pinning)
+    // Cert hash (cert-hash.js from the gateway; null = PKI, no pinning)
     const hashHex = (window as any).CERT_HASH as string | null | undefined;
     let certHash: Uint8Array | null = null;
     if (hashHex) certHash = hexToBytes(hashHex);

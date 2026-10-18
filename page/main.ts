@@ -3,7 +3,8 @@
 // which runs the C++ wasm engine via js/srt_engine.js).
 // host/port/stream/token come from ?host=&port=&stream=&token= URL params
 // (reference-viewer behavior); defaults: page host + window.WT_PORT from
-// cert-hash.js + stream "default". cert-hash.js is proxied by serve.mjs.
+// cert-hash.js + stream "default". cert-hash.js is served same-origin by
+// the gateway.
 import { mountPlayer } from './vendor/player/index';
 
 const canvas = document.querySelector('canvas')!;

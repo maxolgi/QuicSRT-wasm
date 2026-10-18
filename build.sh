@@ -117,7 +117,7 @@ case "${1:-}" in
         # bundles keep ../build/srt_engine.mjs EXTERNAL: the emcc module must
         # be served as its own file because it spawns its pthread workers by
         # self-importing srt_engine.mjs (and fetches the .wasm relative to
-        # itself) - serve.mjs maps /build/ to this repo's build/.
+        # itself) - the deploy target puts it at dist/build/ for that.
         [ -f build/srt_engine.mjs ] || { echo "build/srt_engine.mjs missing - run ./build.sh engine first" >&2; exit 1; }
         ESBUILD="$HOME/maxolgi/WebSRT/web/node_modules/.bin/esbuild"
         [ -x "$ESBUILD" ] || { echo "esbuild not found at $ESBUILD" >&2; exit 1; }
@@ -126,8 +126,8 @@ case "${1:-}" in
         # reference to the WebSRT checkout - same layout depth as web/src)
         ln -sfn "$HOME/maxolgi/WebSRT/web/wasm" page/wasm
         # the bundles' external ../build/srt_engine.mjs resolves relative to
-        # page/bundle/ - serve.mjs maps /build/ to the repo for the browser,
-        # this symlink gives node (page/ab_smoke.mjs) the same view
+        # page/bundle/ - ./build.sh deploy maps it to dist/build/ for the
+        # browser, this symlink gives node (page/ab_smoke.mjs) the same view
         ln -sfn ../build page/build
         mkdir -p page/bundle
         "$ESBUILD" page/vendor/worker.ts --bundle --format=esm \
@@ -152,11 +152,10 @@ case "${1:-}" in
         ;;
     deploy)
         # Self-contained dist/ for the supervised gateway's web_root
-        # (/etc/websrt-cpp/gateway.conf) - replaces the ad-hoc node
-        # serve.mjs flow: the bundles keep ../build/srt_engine.mjs
-        # external, so the engine module + its self-relative .wasm ride
-        # along at dist/build/ to make that import resolve when the
-        # gateway serves dist/ as-is.
+        # (/etc/websrt-cpp/gateway.conf): the bundles keep
+        # ../build/srt_engine.mjs external, so the engine module + its
+        # self-relative .wasm ride along at dist/build/ to make that
+        # import resolve when the gateway serves dist/ as-is.
         [ -f build/srt_engine.mjs ] || { echo "build/srt_engine.mjs missing - run ./build.sh engine first" >&2; exit 1; }
         [ -f page/bundle/app.js ] || { echo "page/bundle/ missing - run ./build.sh page first" >&2; exit 1; }
         rm -rf dist

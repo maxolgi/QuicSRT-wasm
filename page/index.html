@@ -1,8 +1,8 @@
 <!doctype html>
 <!-- M3 minimal player page: vendored WebSRT player SDK + the C++ wasm
-     engine worker. Serve with page/serve.mjs (COOP/COEP on every response:
-     the emcc engine uses pthreads, which need a cross-origin-isolated
-     context). -->
+     engine worker. Served by the websrt-cpp gateway from dist/
+     (./build.sh deploy; COOP/COEP on every response: the emcc engine uses
+     pthreads, which need a cross-origin-isolated context). -->
 <html>
 <head>
     <meta charset="utf-8">

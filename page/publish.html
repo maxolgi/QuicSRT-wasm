@@ -5,8 +5,9 @@
      layer, the C++ muxer behind js/muxer_engine.js since M7), over
      WebTransport to a WebSRT gateway.
      Driving logic mirrors WebSRT's publish UI (stream.tsx @ 854c25c); deltas
-     are deliberate and listed in page/README.md. Serve with page/serve.mjs
-     (COOP/COEP on every response: the emcc engine uses pthreads). -->
+     are deliberate and listed in page/README.md. Served by the websrt-cpp
+     gateway from dist/ (./build.sh deploy; COOP/COEP on every response:
+     the emcc engine uses pthreads). -->
 <html>
 <head>
     <meta charset="utf-8">
