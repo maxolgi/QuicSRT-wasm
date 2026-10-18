@@ -1,8 +1,8 @@
 {
-  "name": "websrt-wasm-cpp",
+  "name": "quicsrt-wasm",
   "version": "0.0.0",
   "private": true,
-  "description": "C++/WASM port of WebSRT's player/publisher engine; esbuild bundles the page/",
+  "description": "C++/WASM port of the QuicSRT player/publisher engine; esbuild bundles the page/",
   "devDependencies": {
     "esbuild": "0.28.2"
   }
