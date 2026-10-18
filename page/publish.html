@@ -3,15 +3,15 @@
      the vendored publisher worker (page/bundle/publish_worker.js <- vendored
      stream-worker.ts: the C++ wasm engine behind js/srt_engine.js as the SRT
      layer, the C++ muxer behind js/muxer_engine.js since M7), over
-     WebTransport to a WebSRT gateway.
+     WebTransport to a QuicSRT gateway.
      Driving logic mirrors WebSRT's publish UI (stream.tsx @ 854c25c); deltas
-     are deliberate and listed in page/README.md. Served by the websrt-cpp
+     are deliberate and listed in page/README.md. Served by the QuicSRT-gateway
      gateway from dist/ (./build.sh deploy; COOP/COEP on every response:
      the emcc engine uses pthreads). -->
 <html>
 <head>
     <meta charset="utf-8">
-    <title>srt-wasm-cpp publisher</title>
+    <title>QuicSRT-wasm publisher</title>
     <style>
         body { font: 14px monospace; margin: 1em; background: #111; color: #ddd; }
         video { width: 100%; max-width: 960px; background: #000; display: block; }

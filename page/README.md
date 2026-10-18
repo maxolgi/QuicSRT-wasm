@@ -1,6 +1,6 @@
 # M3 minimal player page
 
-Plays a live WebSRT stream on a canvas through the C++ wasm engine
+Plays a live QuicSRT stream on a canvas through the C++ wasm engine
 (`build/srt_engine.mjs` behind `js/srt_engine.js`). `page/vendor/` is the
 vendored WebSRT player SDK (byte-identical to WebSRT @ 854c25c except the
 engine-swap lines noted below).
@@ -10,7 +10,7 @@ engine-swap lines noted below).
 - Open: `https://127.0.0.1:8443/?stream=browsertest` (self-signed cert —
   accept it; COOP/COEP headers come from the gateway - the emcc engine
   needs pthreads)
-- Gateway: the supervised `websrt-cpp` service (WT udp 4435, SRT ingest
+- Gateway: the supervised `QuicSRT-gateway` service (WT udp 4435, SRT ingest
   9102, web https://127.0.0.1:8443, health 127.0.0.1:9292; see AGENTS.md).
   It serves `/cert-hash.js` same-origin (fresh hash each boot);
   `?host=`/`?port=`/`?stream=` override.
@@ -21,8 +21,8 @@ engine-swap lines noted below).
 
       ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -c:v libx264 -preset veryfast -f mpegts "srt://127.0.0.1:9102?streamid=test&mode=caller&latency=120"
 
-  or WebTransport publish with the libwebsrt-patched ffmpeg (port 4435, hash
-  file dance in `websrt-gateway-cpp/scripts/websrt-cpp-testpub.sh`).
+  or WebTransport publish with the libquicsrt-patched ffmpeg (port 4435, hash
+  file dance in `QuicSRT-gateway/scripts/QuicSRT-gateway-testpub.sh`).
 
 Known deltas: worker.ts line 1 swaps the Rust glue import for
 `../../js/srt_engine.js` (engine API deltas documented in `js/srt_engine.js`);
@@ -41,7 +41,7 @@ publisher runtime bundles import ZERO Rust wasm pkgs.
 ## M5 perf snapshot (step 7, 2026-10-17)
 
 Host `deb` (16 cores), Chrome 151, stream `browsertest` (testsrc2 640x360@30
-libx264 + sine AAC, ~0.93 Mbps TS, 0 loss/drop) via the local `websrt-cpp`
+libx264 + sine AAC, ~0.93 Mbps TS, 0 loss/drop) via the local `QuicSRT-gateway`
 gateway, software WebCodecs decode — `prefer-hardware` configure proved
 flaky in this Chrome for BOTH paths (identical `avc1.64001e` + avcC configs
 rejected in a retry loop), so every run pins `?decode=software`. OLD = this
@@ -111,7 +111,7 @@ with the vendored `formatPubStats`).
   acquired - so this mode covers neither the mic-audio path nor real
   device capture; without the param the page is unchanged (getUserMedia).
 - URL: the `url:` field, default `wt://127.0.0.1:4435` (the local
-  `websrt-cpp` gateway; `wt://host:port` is shorthand for
+  `QuicSRT-gateway` gateway; `wt://host:port` is shorthand for
   `https://host:port/wt`). The `publish=` query always comes from the
   stream-name field (localStorage-persisted random 8-char key, WebSRT's
   behavior); `?token=` on the page URL passes through. cert-hash.js drives
@@ -150,8 +150,8 @@ testpub). Node gates first, all exit 0: `js/test_contract.mjs`,
 - Record 20 s with the patched ffmpeg (live hash via `cert_hash_file`,
   the testpub script's pattern - the hash rotates per gateway boot):
 
-      ../libwebsrt/deps/ffmpeg/ffmpeg \
-        -f mpegts -i "websrt://127.0.0.1:4435?stream=m6verA&cert_hash_file=/tmp/opencode/m6-cert-hash.js" \
+      ../libquicsrt/deps/ffmpeg/ffmpeg \
+        -f mpegts -i "quicsrt://127.0.0.1:4435?stream=m6verA&cert_hash_file=/tmp/opencode/m6-cert-hash.js" \
         -c copy -t 20 -y /tmp/opencode/m6_cpp.ts
 
   (`m6-cert-hash.js` is a fresh `curl -sk https://127.0.0.1:8443/cert-hash.js`
@@ -160,7 +160,7 @@ testpub). Node gates first, all exit 0: `js/test_contract.mjs`,
   then stalled in ffmpeg's live `-c copy` remux (its h264 parser reports
   `non-existing PPS` mid-GOP and stops emitting; the same bytes parse
   flawlessly offline - see ffprobe below). The full-20 s raw wire capture
-  via the sibling repo's `websrt-dump` (same libwebsrt subscriber):
+  via the sibling repo's `quicsrt-dump` (same libquicsrt subscriber):
   3349784 B / 20.2 s / 3234 messages, lost 0 rtx 0 dropped 0, rate
   1.41 mbps.
 - ffprobe (`-v error`, zero errors) on the raw 20 s capture: one stream -

@@ -9,7 +9,7 @@
 // ?source=canvas hardware-free test-source mode (README), a plain <pre>
 // log instead of the preact debug panel, no stream-back player
 // (the viewer link points at the M3 player), and a publish URL input
-// (wt://host:port shorthand, default the local websrt-cpp gateway) instead
+// (wt://host:port shorthand, default the local QuicSRT-gateway) instead
 // of ?host=/?port=/window.WT_PORT resolution. cert-hash.js is served
 // same-origin by the gateway; window.CERT_HASH pins the WT session exactly
 // as in WebSRT (null hash = PKI mode, no pinning).
@@ -199,7 +199,7 @@ function startCanvasSource(): MediaStream {
         );
         ctx.font = 'bold 36px monospace';
         ctx.fillStyle = '#6cf';
-        ctx.fillText(`websrt canvas run ${runId}`, CANVAS_W / 2, CANVAS_H / 2 + 56);
+        ctx.fillText(`quicsrt canvas run ${runId}`, CANVAS_W / 2, CANVAS_H / 2 + 56);
         canvasFrame++;
         canvasRafId = requestAnimationFrame(paint);
     };
@@ -432,7 +432,7 @@ function updateEncodeStats(srt: StatsMsg, enc: EncodeStats): void {
 
 // Persistent stream key: load from localStorage or generate a random 8-char
 // one (stream.tsx, verbatim).
-const STREAM_KEY_KEY = 'websrt-stream-name';
+const STREAM_KEY_KEY = 'quicsrt-stream-name';
 const savedName = localStorage.getItem(STREAM_KEY_KEY);
 streamNameInput.value = savedName ?? Array.from(
     { length: 8 },
