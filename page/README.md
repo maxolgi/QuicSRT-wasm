@@ -3,8 +3,7 @@
 Plays a live WebSRT stream on a canvas through the C++ wasm engine
 (`build/srt_engine.mjs` behind `js/srt_engine.js`). `page/vendor/` is the
 vendored WebSRT player SDK (byte-identical to WebSRT @ 854c25c except the
-one engine-swap line in `worker.ts`); `page/wasm` is a symlink to
-WebSRT/web/wasm (the built demuxer wasm pkgs - read-only reference).
+engine-swap lines noted below).
 
 - Serve: `./build.sh engine && ./build.sh page && ./build.sh deploy` — the
   supervised gateway serves `dist/` as its web_root
@@ -15,9 +14,6 @@ WebSRT/web/wasm (the built demuxer wasm pkgs - read-only reference).
   9102, web https://127.0.0.1:8443, health 127.0.0.1:9292; see AGENTS.md).
   It serves `/cert-hash.js` same-origin (fresh hash each boot);
   `?host=`/`?port=`/`?stream=` override.
-- Rust-vs-C++ cross-check: the A/B harness below runs both engine arms
-  through the same gateway (the Rust wasm pkg runs client-side) — the
-  Rust sibling gateway (4433/9000/9091, no web port) is not needed for it.
 - Decode: `?decode=software|hardware` seeds the hw/sw WebCodecs preference
   (localStorage `websrt-hw-mode`); the `decode: hw/sw` button above the
   stats line flips it (page reloads). Software-only machines need software.
@@ -32,19 +28,15 @@ Known deltas: worker.ts line 1 swaps the Rust glue import for
 `../../js/srt_engine.js` (engine API deltas documented in `js/srt_engine.js`);
 demux.ts line 4 swaps the Rust demux pkg import for `../../js/demux_engine.js`
 (the M5 C++ demuxer behind the same surface; deltas documented in
-`js/demux_engine.js`);
-`page/wasm` is a symlink, not vendored sources. The M6 publisher pair
+`js/demux_engine.js`). The M6 publisher pair
 `vendor/stream-worker.ts` + `vendor/shared/publish.ts` is vendored @ 854c25c
 as well: stream-worker.ts swaps the engine import the same way and adapts
 `flushTsToSrt()` to the C ABI `sendMessage()` return codes (deltas 1-2
 documented in its header); shared/publish.ts is verbatim. stream-worker.ts
 line 31 swaps the Rust muxer pkg import for `../../js/muxer_engine.js`
 (the M7 C++ muxer behind the same surface; delta 3 in its header, deltas
-in `js/muxer_engine.js`; the `ts_muxer_wasm_bg.wasm` bundle copy went
-with it). With M7 the cutover is complete: the player and publisher
-runtime bundles import ZERO Rust wasm pkgs — `page/wasm` stays dev-time
-only (the parity harnesses and the ab page's Rust engine arm still
-import it through the symlink).
+in `js/muxer_engine.js`). With M7 the cutover is complete: the player and
+publisher runtime bundles import ZERO Rust wasm pkgs.
 
 ## M5 perf snapshot (step 7, 2026-10-17)
 
@@ -84,62 +76,9 @@ allocation-churn win stays unmeasured rather than disproven — a heavier
 stream would be the honest test (the M5 stretch goal keeps its
 "measured justification required" bar).
 
-## M4 A/B harness (`/ab.html`)
-
-Runs the Rust engine (WebSRT `srt-wasm`, via the vendored wasm-bindgen glue
-`page/wasm/srt-wasm/`) and the C++ engine (`js/srt_engine.js` →
-`build/srt_engine.mjs`) side by side on the SAME live stream. Each engine
-gets its own dedicated module worker (`page/bundle/ab_worker.js` bundles
-BOTH glues; the start command picks one) and its own WebTransport
-subscriber session - one session cannot serve two subscribers, their SRT
-handshakes/ACKs would collide. The worker loop is the vendored
-`worker.ts` mechanics (connect/cert-hash pin, datagram pump, adaptive
-4-5 ms tick) with the demux/decode replaced by accounting: every
-DeliverMessage payload feeds a streaming SHA-256 (full run + per
-wall-second buckets keyed off the shared START epoch) and message/byte
-counters; 1 Hz `getStats()` samples go to the main thread.
-
-What the verdict means: the two sessions join the stream at independent
-content offsets, so full-run hashes match only when both engines happened
-to join at the same offset - on a clean loopback expect `hashes differ`
-with a small msgs/bytes delta. The byte-level gate is `aligned buckets`:
-per-second payload digests compared over seconds that are interior for
-BOTH engines (each engine's first/last active second excluded - join/leave
-edges differ by construction). On zero-loss loopback the aligned interior
-buckets should match. Expected noise if a boundary packet releases across
-a second edge in one engine only: a single mismatched bucket with a tiny
-msgs delta.
-
-The `VERDICT:` line above `COMPARE:` is the machine-readable decision on
-the same data (`computeVerdict` + `VERDICT_THRESHOLDS` in page/ab.ts, unit-
-driven by page/ab_smoke.mjs): at most 1 mismatched aligned bucket (the
-expected noise above), full-run msgs/bytes deltas within
-max(32 msgs / 128 kB, 2% of the smaller engine - the measured clean-loopback
-reference was Δ20 msgs / ~20 kB, 0.27%), zero rxLoss/rxDropped, and zero
-outgoing-ring drops on the engine that reports them (null = no ring, n/a).
-Fewer than 3 common interior seconds is NOT-EVALUABLE rather than a pass.
-Known blind spot: a one-second gap also removes its neighbours from the
-bucket comparison (gap propagation) - the msgs-delta threshold is the
-backstop that still catches it.
-
-Runbook:
-
-    ./build.sh engine && ./build.sh page && ./build.sh deploy
-    # terminal 2 - publish a stream (SRT ingest 9102, streamid = stream name):
-    ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -c:v libx264 -preset veryfast -b:v 1M -f mpegts "srt://127.0.0.1:9102?streamid=ab&mode=caller&latency=120"
-    # browser: https://127.0.0.1:8443/ab.html?stream=ab&latency=120
-    #   START -> both engines subscribe concurrently
-    #   wait >= 30 s (watch the live rtt/delivered line per engine)
-    #   STOP  -> results table + COMPARE verdict
-
-Static gate (no browser): `node page/ab_smoke.mjs` - imports both bundles
-in node, self-tests the streaming SHA-256 against crypto.subtle, drives the
-ab worker end-to-end against the C++ engine over a fake WebTransport
-(js/test_contract.mjs's in-wasm publisher; verifies 2000 messages delivered
-byte-identical with the exact full-run digest), and checks the verdict
-computation. `page/build` (symlink -> ../build) exists so node resolves the
-bundles' external `../build/srt_engine.mjs` the same way `./build.sh deploy`
-maps it to `dist/build/` for the browser.
+The M4 A/B harness that proved engine parity was removed when the
+oracle retired; see git history (and `js/engine_smoke.mjs`, which
+keeps its Rust-free fake-WebTransport engine end-to-end gate).
 
 ## M6 publisher page (`/publish.html`)
 
@@ -193,7 +132,7 @@ All against the supervised C++ gateway (`dist/` via
 `./build.sh page && ./build.sh deploy`; `browsertest` from the supervised
 testpub). Node gates first, all exit 0: `js/test_contract.mjs`,
 `js/demux_parity.mjs`, `js/muxer_parity.mjs` (golden-baseline gates vs
-`js/fixtures/*.baseline.json`), `page/ab_smoke.mjs`.
+`js/fixtures/*.baseline.json`), `js/engine_smoke.mjs`.
 
 - Player (`/?stream=browsertest`): `crossOriginIsolated === true`, canvas
   640x360 animating (two full-frame pixel sums 2 s apart differ:

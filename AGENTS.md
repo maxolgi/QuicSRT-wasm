@@ -15,7 +15,7 @@ gates now pin the port to the committed golden baselines, standalone.
   build/replay.js)
 - `./build.sh engine` — build/srt_engine.mjs + .wasm (the one module both
   the player and the publisher drive)
-- `./build.sh page` — bundle the player + A/B + publisher pages
+- `./build.sh page` — bundle the player + publisher pages
   (needs engine)
 - `./build.sh deploy` — assemble the self-contained dist/ the gateway
   serves as web_root (needs page)
@@ -27,8 +27,10 @@ gates now pin the port to the committed golden baselines, standalone.
     and prints the drift diff)
   - `node js/muxer_parity.mjs` — muxer regression gate vs
     js/fixtures/muxer.baseline.json (`--record` likewise)
-  - `node page/ab_smoke.mjs` — static A/B harness gate (needs
-    `./build.sh page`)
+  - `node js/engine_smoke.mjs` — fake-WebTransport end-to-end engine gate
+    (the in-wasm publisher piped through a fake transport into a second
+    engine instance; verifies 2000 messages delivered byte-identical plus
+    stats/bucket accounting; needs `./build.sh engine`)
 - Fixtures: `js/fixtures/` (sha/size-gated by manifest.sha256, which
   gates the .ts files only); the golden baselines live alongside and are
   validated by their provenance field + the `--record` drift diff;
@@ -59,7 +61,6 @@ serve).
       ./build.sh page && ./build.sh deploy
       # gateway serves dist/ as web_root:
       #   player   https://127.0.0.1:8443/?stream=browsertest
-      #   A/B      https://127.0.0.1:8443/ab.html?stream=browsertest
       #   publish  https://127.0.0.1:8443/publish.html
 
 - The gateway serves player responses with COOP/COEP headers (required

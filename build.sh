@@ -15,9 +15,9 @@ Commands:
     replay   Build the M2 receiver replay gate test (build/replay.js)
     engine   Build the M3 JS engine wrapper module (build/srt_engine.mjs,
              driven through js/srt_engine.js; gate: node js/test_contract.mjs)
-    page     Bundle the M3 player page + M4 A/B harness + M6 publisher page
-             (page/bundle/{app,worker,ab,ab_worker,publish,publish_worker}.js)
-             with the local esbuild (package.json - npm install);
+    page     Bundle the M3 player page + M6 publisher page
+             (page/bundle/{app,worker,publish,publish_worker}.js) with the
+             local esbuild (package.json - npm install);
              needs ./build.sh engine first
     deploy   Assemble the self-contained dist/ tree the supervised gateway
              serves as web_root: page html + page/bundle + the engine module
@@ -122,34 +122,16 @@ case "${1:-}" in
         [ -f build/srt_engine.mjs ] || { echo "build/srt_engine.mjs missing - run ./build.sh engine first" >&2; exit 1; }
         ESBUILD="node_modules/.bin/esbuild"
         [ -x "$ESBUILD" ] || { echo "esbuild not found at $ESBUILD - run: npm install" >&2; exit 1; }
-        # demux.ts's ../wasm/mpeg2ts-wasm and ab_worker.ts's
-        # ./wasm/srt-wasm/srt_wasm.js (the built wasm pkgs, read-only
-        # reference to the WebSRT checkout - same layout depth as web/src)
-        ln -sfn "$HOME/maxolgi/WebSRT/web/wasm" page/wasm
-        # the bundles' external ../build/srt_engine.mjs resolves relative to
-        # page/bundle/ - ./build.sh deploy maps it to dist/build/ for the
-        # browser, this symlink gives node (page/ab_smoke.mjs) the same view
-        ln -sfn ../build page/build
         mkdir -p page/bundle
         "$ESBUILD" page/vendor/worker.ts --bundle --format=esm \
             --external:../build/srt_engine.mjs --outfile=page/bundle/worker.js
         "$ESBUILD" page/main.ts --bundle --format=esm --outfile=page/bundle/app.js
-        # M4 A/B harness: the ab worker bundles BOTH engine glues (rust
-        # wasm-bindgen + the C++ js wrapper) and picks one per instance at
-        # the start command; same --external treatment for the emcc module.
-        "$ESBUILD" page/ab_worker.ts --bundle --format=esm \
-            --external:../build/srt_engine.mjs --outfile=page/bundle/ab_worker.js
-        "$ESBUILD" page/ab.ts --bundle --format=esm --outfile=page/bundle/ab.js
         # M6 publisher page: the worker bundles the vendored stream-worker.ts
-        # (C++ engine + C++ muxer since M7 - no Rust wasm copy needed); same
-        # --external treatment for the emcc module.
+        # (C++ engine + C++ muxer since M7); same --external treatment for
+        # the emcc module.
         "$ESBUILD" page/vendor/stream-worker.ts --bundle --format=esm \
             --external:../build/srt_engine.mjs --outfile=page/bundle/publish_worker.js
         "$ESBUILD" page/publish.ts --bundle --format=esm --outfile=page/bundle/publish.js
-        # wasm-bindgen glue resolves its wasm via new URL(..., import.meta.url)
-        # -> the bundle's own directory
-        cp "$HOME/maxolgi/WebSRT/web/wasm/mpeg2ts-wasm/mpeg2ts_wasm_bg.wasm" page/bundle/
-        cp "$HOME/maxolgi/WebSRT/web/wasm/srt-wasm/srt_wasm_bg.wasm" page/bundle/
         ;;
     deploy)
         # Self-contained dist/ for the supervised gateway's web_root
