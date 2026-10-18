@@ -39,8 +39,8 @@ export function installPthreadSpawnGuard() {
     if (typeof process !== 'undefined' || typeof self === 'undefined' || typeof Worker === 'undefined') {
         return;
     }
-    if (self.__websrtPthreadGuard) return;
-    self.__websrtPthreadGuard = true;
+    if (self.__quicsrtPthreadGuard) return;
+    self.__quicsrtPthreadGuard = true;
 
     const RealWorker = Worker;
 

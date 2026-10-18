@@ -1,5 +1,5 @@
-// The M2 receiver C ABI: libwebsrt's WT-free ReceiverCore
-// (deps/libwebsrt/src/srt_session/receiver_core.{h,cpp} - SRT listener
+// The M2 receiver C ABI: libquicsrt's WT-free ReceiverCore
+// (deps/libquicsrt/src/srt_session/receiver_core.{h,cpp} - SRT listener
 // role over the fork's virtual-transport seam, the same machinery the
 // native subscriber session uses) behind extern "C" for the browser
 // player engine. The JS wrapper is built against exactly this surface.

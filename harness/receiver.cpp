@@ -1,5 +1,5 @@
-// The srtw_* C ABI (receiver.h) as a thin adapter over libwebsrt's
-// WT-free ReceiverCore (deps/libwebsrt/src/srt_session/receiver_core.
+// The srtw_* C ABI (receiver.h) as a thin adapter over libquicsrt's
+// WT-free ReceiverCore (deps/libquicsrt/src/srt_session/receiver_core.
 // {h,cpp}) - the same receiver machinery the native subscriber session
 // uses, replacing this repo's own port of it. What the adapter adds, and
 // nothing else:
@@ -65,7 +65,7 @@ public:
         {
             return n;
         }
-        using Read = websrt::ReceiverCore;
+        using Read = quicsrt::ReceiverCore;
         return n == Read::kReadTimeout ? 0 : -1;
     }
 
@@ -90,10 +90,10 @@ public:
     }
 
 private:
-    static websrt::ReceiverCoreParams Params(int latency_ms)
+    static quicsrt::ReceiverCoreParams Params(int latency_ms)
     {
-        websrt::ReceiverCoreParams params;
-        params.payload_size     = websrt::kSrtPayloadSize; // 1128: 6 x 188 TS packets
+        quicsrt::ReceiverCoreParams params;
+        params.payload_size     = quicsrt::kSrtPayloadSize; // 1128: 6 x 188 TS packets
         params.tsbpd_latency_ms = latency_ms;
         params.initial_rtt_ms   = 0; // seeded via Start's measured RTT
         return params;
@@ -111,7 +111,7 @@ private:
 
     srtw_send_fn          send_fn_;
     void*                 send_ctx_;
-    websrt::ReceiverCore  core_;
+    quicsrt::ReceiverCore  core_;
 };
 
 } // namespace
@@ -165,7 +165,7 @@ int srtw_send_message(void* h, const uint8_t* buf, int len, int timeout_ms)
 {
     if (h == nullptr)
     {
-        return websrt::ReceiverCore::kSendInvalidArg;
+        return quicsrt::ReceiverCore::kSendInvalidArg;
     }
     return static_cast<SrtwReceiver*>(h)->Send(buf, len, timeout_ms);
 }

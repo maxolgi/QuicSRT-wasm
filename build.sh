@@ -6,10 +6,10 @@ usage() {
 Usage: ./build.sh <command>
 
 Commands:
-    setup    One-time: init deps/libwebsrt + its nested deps/srt
-    lib      Configure + build libwebsrt's receiver-only flavor + the srt
-             static lib with Emscripten (WEBSRT_ENABLE_WT=OFF,
-             WEBSRT_RECEIVER_ONLY=ON -> websrt::receiver-core)
+    setup    One-time: init deps/libquicsrt + its nested deps/srt
+    lib      Configure + build libquicsrt's receiver-only flavor + the srt
+             static lib with Emscripten (QUICSRT_ENABLE_WT=OFF,
+             QUICSRT_RECEIVER_ONLY=ON -> quicsrt::receiver-core)
     engine   Build the M3 JS engine wrapper module (build/srt_engine.mjs,
              driven through js/srt_engine.js; gate: node js/test_contract.mjs)
     page     Bundle the M3 player page + M6 publisher page
@@ -23,33 +23,33 @@ Commands:
 EOF
 }
 
-# libwebsrt's Emscripten flavor: the WT-free ReceiverCore (compiled by the
-# libwebsrt configure as a static lib) over the srt fork. Paths and lib
+# libquicsrt's Emscripten flavor: the WT-free ReceiverCore (compiled by the
+# libquicsrt configure as a static lib) over the srt fork. Paths and lib
 # artifacts shared by the link steps below.
-SRT_INC="-Ideps/libwebsrt/deps/srt/srtcore -Ideps/libwebsrt/deps/srt/common -Ibuild/libwebsrt/deps/srt"
-LW_INC="-Ideps/libwebsrt/src"
-LW_LIB="build/libwebsrt/libwebsrt_receiver_core.a"
+SRT_INC="-Ideps/libquicsrt/deps/srt/srtcore -Ideps/libquicsrt/deps/srt/common -Ibuild/libquicsrt/deps/srt"
+LW_INC="-Ideps/libquicsrt/src"
+LW_LIB="build/libquicsrt/libquicsrt_receiver_core.a"
 # the srt submodule's own CMake puts its archive at the configure root
-SRT_LIB="build/libwebsrt/libsrt.a"
+SRT_LIB="build/libquicsrt/libsrt.a"
 
 case "${1:-}" in
     setup)
-        # The nested srt pin rides the libwebsrt commit checked out above.
-        # Run inside the submodule, NOT --recursive: libwebsrt also carries
+        # The nested srt pin rides the libquicsrt commit checked out above.
+        # Run inside the submodule, NOT --recursive: libquicsrt also carries
         # deps/lsquic (WT-only) and srt its test submodules - neither builds
         # here and they would just be cloned.
-        git submodule update --init deps/libwebsrt
-        git -C deps/libwebsrt submodule update --init deps/srt
+        git submodule update --init deps/libquicsrt
+        git -C deps/libquicsrt submodule update --init deps/srt
         ;;
     lib)
         source ~/emsdk/emsdk_env.sh
-        emcmake cmake -S deps/libwebsrt -B build/libwebsrt \
+        emcmake cmake -S deps/libquicsrt -B build/libquicsrt \
             -DCMAKE_BUILD_TYPE=Release \
-            -DWEBSRT_ENABLE_WT=OFF \
-            -DWEBSRT_RECEIVER_ONLY=ON \
+            -DQUICSRT_ENABLE_WT=OFF \
+            -DQUICSRT_RECEIVER_ONLY=ON \
             -DCMAKE_C_FLAGS="-pthread -fexceptions" \
             -DCMAKE_CXX_FLAGS="-pthread -fexceptions"
-        cmake --build build/libwebsrt -j "$(nproc)" --target websrt_receiver_core
+        cmake --build build/libquicsrt -j "$(nproc)" --target quicsrt_receiver_core
         ;;
     engine)
         source ~/emsdk/emsdk_env.sh
@@ -97,7 +97,7 @@ case "${1:-}" in
         ;;
     deploy)
         # Self-contained dist/ for the supervised gateway's web_root
-        # (/etc/websrt-cpp/gateway.conf): the bundles keep
+        # (/etc/QuicSRT-gateway/gateway.conf): the bundles keep
         # ../build/srt_engine.mjs external, so the engine module + its
         # self-relative .wasm ride along at dist/build/ to make that
         # import resolve when the gateway serves dist/ as-is.
