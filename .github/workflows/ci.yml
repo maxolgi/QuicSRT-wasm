@@ -1,4 +1,4 @@
-# CI for websrt-wasm-cpp: build the full dist/ tree the gateway serves
+# CI for QuicSRT-wasm: build the full dist/ tree the gateway serves
 # (setup -> lib -> engine -> page -> deploy) and run the node gate suite
 # (AGENTS.md). The assembled dist/ is uploaded as a workflow artifact.
 
@@ -11,7 +11,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Cancel superseded runs on the same ref (same as libwebsrt's ci).
+# Cancel superseded runs on the same ref (same as libquicsrt's ci).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -30,9 +30,9 @@ jobs:
           git clone --depth 1 https://github.com/emscripten-core/emsdk "$HOME/emsdk"
           "$HOME/emsdk/emsdk" install 6.0.8
           "$HOME/emsdk/emsdk" activate 6.0.8
-      - name: Setup (deps/libwebsrt + nested deps/srt)
+      - name: Setup (deps/libquicsrt + nested deps/srt)
         run: ./build.sh setup
-      - name: Build libwebsrt receiver-only + srt (Emscripten)
+      - name: Build libquicsrt receiver-only + srt (Emscripten)
         run: ./build.sh lib
       - name: Build engine
         run: ./build.sh engine
@@ -59,11 +59,11 @@ jobs:
           if-no-files-found: error
 
   # Publish a GitHub Release for every successful master build, like
-  # websrt-gateway-cpp's ci (and WebSRT's build.yml before it): master
+  # QuicSRT-gateway's ci (and WebSRT's build.yml before it): master
   # push -> dev-<short_sha> marked latest (must NOT be a prerelease -
   # GitHub ignores make_latest on pre-releases, losing the Latest badge
   # and /releases/latest); v* tag push -> stable release tagged
-  # <version>. The dist tree rides as websrt-wasm-dist.zip with its
+  # <version>. The dist tree rides as quicsrt-wasm-dist.zip with its
   # contents at the zip root (unzip -d <web_root>), the same shape as
   # WebSRT's websrt-web-dist.zip asset the gateway fetches.
   release:
@@ -82,8 +82,8 @@ jobs:
       - name: Stage release asset
         run: |
           mkdir -p release
-          (cd artifacts/dist && zip -q -r "$GITHUB_WORKSPACE/release/websrt-wasm-dist.zip" .)
-          unzip -l release/websrt-wasm-dist.zip
+          (cd artifacts/dist && zip -q -r "$GITHUB_WORKSPACE/release/quicsrt-wasm-dist.zip" .)
+          unzip -l release/quicsrt-wasm-dist.zip
       - name: Set release metadata
         id: meta
         env:
