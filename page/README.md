@@ -1,9 +1,34 @@
-# M3 minimal player page
+# QuicSRT-wasm pages (viewer / publisher / call)
 
-Plays a live QuicSRT stream on a canvas through the C++ wasm engine
-(`build/srt_engine.mjs` behind `js/srt_engine.js`). `page/vendor/` is the
-player SDK (adapted from the legacy TypeScript player: engine-swap lines
-and the quicsrt-* localStorage keys below).
+Three pages, all ports of the QuicSRT-rust web pages onto the vendored
+SDK (`page/vendor/`, adapted from the legacy TypeScript player), all
+running 100% on the C++ wasm engine (`build/srt_engine.mjs` behind
+`js/srt_engine.js`) — no Rust anywhere in the runtime:
+
+- `index.html` + `main.ts` — the viewer: plays a live QuicSRT stream on
+  a canvas
+- `publish.html` + `publish.tsx` — the publisher (webcam/canvas ->
+  WT/SRT)
+- `call.html` + `call.tsx` — the 1:1 call
+- `page/vendor/debug/` — the vendored Preact debug panel: a lazy chunk
+  on the viewer (main.ts dynamic-imports it, keeping it off the critical
+  path), inline-mounted on publish/call
+
+`./build.sh page` bundles the three entries in ONE esbuild `--splitting`
+run — `page/bundle/{main,publish,call}.js` plus the shared/lazy
+`chunk-*` files (the workers build separately as `worker.js` /
+`publish_worker.js`); `./build.sh deploy` copies `page/bundle/*`
+wholesale into `dist/bundle/`, the html files + the `quicsrt.png` /
+`favicon.ico` assets (the pages' `/quicsrt.png` favicon link) into
+`dist/` root. The debug panel's data sources are the C++ engine exports
+(`srtw_get_stats`, `tsd_debug_snapshot`, the tsd meter) flowing through
+the vendored worker. Wasm-specific deltas kept vs the rust pages: the
+`workerUrl` `/bundle/worker.js` + `/bundle/publish_worker.js` (instead
+of vite worker imports), `?decode=` seeding, the `?source=canvas`
+publisher mode, the `wt://host:port` URL shorthand + cert-hash.js
+`CERT_HASH` pinning, and the `quicsrt-*` localStorage keys.
+
+Viewer how-to:
 
 - Serve: `./build.sh engine && ./build.sh page && ./build.sh deploy` — the
   supervised gateway serves `dist/` as its web_root

@@ -118,6 +118,7 @@ case "${1:-}" in
         rm -rf dist
         mkdir -p dist/bundle dist/build
         cp page/*.html dist/
+        cp page/quicsrt.png page/favicon.ico dist/
         cp page/bundle/* dist/bundle/
         cp build/srt_engine.mjs build/srt_engine.wasm dist/build/
         echo "deployed dist/ (gateway web_root):"

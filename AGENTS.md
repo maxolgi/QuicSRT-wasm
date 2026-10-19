@@ -12,10 +12,11 @@ gates now pin the port to the committed golden baselines, standalone.
   with Emscripten
 - `./build.sh engine` — build/srt_engine.mjs + .wasm (the one module both
   the player and the publisher drive)
-- `./build.sh page` — bundle the player + publisher pages
+- `./build.sh page` — bundle the three page entries (page/main.ts,
+  page/publish.tsx, page/call.tsx) + the two workers into page/bundle
   (needs engine)
 - `./build.sh deploy` — assemble the self-contained dist/ the gateway
-  serves as web_root (needs page)
+  serves as web_root (index/publish/call.html + assets; needs page)
 - CI (`.github/workflows/ci.yml`) — the full chain + the node gates on
   GitHub Actions (ubuntu-24.04, emsdk 6.0.8 at ~/emsdk); uploads dist/
   as a workflow artifact and publishes `quicsrt-wasm-dist.zip` as a
