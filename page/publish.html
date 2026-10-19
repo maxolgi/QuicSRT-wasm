@@ -1,55 +1,250 @@
 <!doctype html>
-<!-- M6 publisher page: webcam video+audio -> WebCodecs encode + TS mux in
-     the vendored publisher worker (page/bundle/publish_worker.js <- vendored
-     stream-worker.ts: the C++ wasm engine behind js/srt_engine.js as the SRT
-     layer, the C++ muxer behind js/muxer_engine.js since M7), over
-     WebTransport to a QuicSRT gateway.
-     Driving logic per page/README.md; deltas
-     are deliberate and listed there. Served by the QuicSRT-gateway
-     gateway from dist/ (./build.sh deploy; COOP/COEP on every response:
-     the emcc engine uses pthreads). -->
-<html>
-<head>
-    <meta charset="utf-8">
+<!-- Publisher page (ported from QuicSRT-rust web/stream.html): the full
+     publisher UI - screen/webcam capture, capture config, stream-back
+     player and the vendored Preact debug panel (page/vendor/debug) -
+     driving the wasm publisher worker (page/bundle/publish_worker.js:
+     WebCodecs encode + the C++ TS mux + the C++ wasm engine behind
+     js/srt_engine.js as the SRT layer) over WebTransport to a
+     QuicSRT-gateway. wasm deltas: the module entry is the pre-bundled
+     /bundle/publish.js, and the capture-config rows keep the url field
+     (wt://host:port shorthand for https://host:port/wt) instead of the
+     rust page's ?host=/?port= resolution. Served by the QuicSRT-gateway
+     from dist/ (./build.sh deploy; COOP/COEP on every response: the
+     emcc engine uses pthreads, which need a cross-origin-isolated
+     context). The debug-panel CSS below styles the vendored Preact
+     panel mounted into #debug-root. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/quicsrt.png" />
     <title>QuicSRT-wasm publisher</title>
     <style>
-        body { font: 14px monospace; margin: 1em; background: #111; color: #ddd; }
-        video { width: 100%; max-width: 960px; background: #000; display: block; }
-        input, button, select { font: inherit; padding: 2px; background: #222; color: #ddd; border: 1px solid #444; }
-        button { margin-right: .5em; padding: .2em 1em; }
-        button:disabled { opacity: .4; }
-        .controls { margin: .5em 0; display: flex; gap: .6em; flex-wrap: wrap; align-items: center; }
-        .controls label { display: flex; align-items: center; gap: 4px; }
-        #status { color: #888; }
-        #pub-stats { white-space: pre-line; }
-        .ok { color: #6f6; } .err { color: #f66; } .info { color: #6cf; }
-        #log { max-width: 960px; white-space: pre-wrap; font-size: 12px; color: #999; max-height: 12em; overflow-y: auto; }
+      body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #111;
+        color: #ddd;
+        margin: 0;
+        padding: 1.5rem;
+        transition: padding 0.2s ease;
+      }
+      body.debug-open {
+      }
+      body.resizing { transition: none; }
+      h1 { font-size: 1.1rem; }
+      h2 { font-size: 0.95rem; color: #999; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+      video, canvas { background: #000; display: block; }
+      .video-pair {
+        display: flex; gap: 10px; align-items: flex-start;
+      }
+      .video-slot {
+        flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+      }
+      .video-slot h2 { margin: 0 0 4px; }
+      .video-slot video, .video-slot canvas {
+        width: 100%; height: auto; aspect-ratio: 16 / 9; max-height: calc(100vh - 140px);
+        object-fit: contain; background: #000; display: block;
+      }
+      #preview:fullscreen, #playback-canvas:fullscreen {
+        width: 100vw; height: 100vh; object-fit: contain; background: #000;
+      }
+      .ok { color: #6f6; }
+      .err { color: #f66; }
+      .info { color: #6cf; }
+      input, button, select {
+        font: inherit; padding: 4px; background: #222; color: #ddd;
+        border: 1px solid #444; border-radius: 3px;
+      }
+      button:hover { background: #333; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      button.muted { opacity: 0.5; }
+      #capture-btn:not(:disabled), #publish-btn:not(:disabled) {
+        background: #1b5e20; color: #b9f6ca; border-color: #2e7d32;
+      }
+      #capture-btn:not(:disabled):hover, #publish-btn:not(:disabled):hover {
+        background: #2e7d32;
+      }
+      .controls { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .controls label { display: flex; align-items: center; gap: 4px; }
+      a { color: #6cf; }
+      a.back { display: inline-block; margin-bottom: 8px; text-decoration: none; }
+      .audio-section { margin-top: 8px; }
+      .audio-row { display: flex; gap: 8px; align-items: center; margin: 4px 0; flex-wrap: wrap; }
+      .audio-row label { display: flex; align-items: center; gap: 4px; min-width: 160px; }
+      .audio-row select { min-width: 180px; }
+      input[type="range"] { width: 80px; vertical-align: middle; }
+      #pub-status { margin-top: 8px; font-size: 12px; color: #999; }
+      .pub-stats { font-size: 12px; color: #999; line-height: 1.6; }
+
+      /* Dark-themed thin scrollbars */
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: #444 transparent;
+      }
+      *::-webkit-scrollbar { width: 8px; height: 8px; }
+      *::-webkit-scrollbar-track { background: transparent; }
+      *::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+      *::-webkit-scrollbar-thumb:hover { background: #555; }
+      *::-webkit-scrollbar-corner { background: transparent; }
+
+      /* Debug panel overlay */
+      #debug-root {
+        position: fixed; top: 0; right: 0; width: 34vw; height: 100vh;
+        background: rgba(17, 17, 17, 0.97); border-left: 1px solid #333;
+        z-index: 9999; display: none; flex-direction: column;
+        font-size: 12px; box-shadow: -4px 0 16px rgba(0,0,0,0.5);
+      }
+      #debug-root.visible { display: flex; }
+      .debug-resizer {
+        position: fixed; top: 0; right: 34vw; width: 7px; height: 100vh;
+        cursor: col-resize; z-index: 10001; background: transparent;
+        transition: background 0.15s; display: none;
+        transform: translateX(50%);
+      }
+      .debug-resizer.visible { display: block; }
+      .debug-resizer:hover, .debug-resizer.dragging { background: transparent; }
+
+      .debug-tabs {
+        display: flex; border-bottom: 1px solid #333; flex-shrink: 0;
+        overflow-x: auto;
+      }
+      .debug-tab {
+        padding: 6px 12px; cursor: pointer; border: none; background: none;
+        color: #888; border-bottom: 2px solid transparent; white-space: nowrap;
+        font: inherit; font-size: 12px;
+      }
+      .debug-tab.active { color: #6cf; border-bottom-color: #6cf; }
+      .debug-content {
+        flex: 1; overflow-y: auto; padding: 8px;
+      }
+      .debug-section { margin-bottom: 12px; }
+      .debug-section h3 {
+        font-size: 11px; color: #999; margin: 0 0 4px 0;
+        text-transform: uppercase; letter-spacing: 0.5px;
+      }
+      .debug-table { width: 100%; border-collapse: collapse; }
+      .debug-table td { padding: 2px 6px; border-bottom: 1px solid #222; }
+      .debug-table td:first-child { color: #999; width: 40%; }
+      .debug-table td:last-child { color: #ddd; text-align: right; font-family: inherit; }
+      .stat-good { color: #6f6; }
+      .stat-warn { color: #fc6; }
+      .stat-bad { color: #f66; }
+
+      .chart-container { position: relative; height: 120px; margin: 4px 0; }
+
+      /* Packet timeline + inspector (Demux tab) */
+      .pkt-live { font-size: 11px; color: #6cf; margin-bottom: 6px; }
+      .pkt-live .pkt-dot { color: #6f6; font-weight: bold; }
+      .pkt-filterbar { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; align-items: center; }
+      .pkt-filterbar input, .pkt-filterbar select { padding: 2px 4px; font-size: 11px; min-width: 0; }
+      .pkt-filterbar input[type="text"] { flex: 1 1 110px; }
+      .pkt-filterbar input[type="number"] { width: 64px; }
+      .packet-scroll { display: block; max-height: 300px; overflow: auto; border: 1px solid #333; }
+      .packet-list { display: block; width: 100%; border-collapse: collapse; font-size: 11px; }
+      .packet-list thead { display: block; position: sticky; top: 0; z-index: 1; background: #1a1a1a; }
+      .packet-list thead tr { background: #1a1a1a; }
+      .packet-list thead th {
+        color: #999; text-align: left; font-weight: normal;
+        padding: 0 4px; border-bottom: 1px solid #444;
+      }
+      .packet-list tbody { display: block; }
+      .packet-list tr {
+        display: flex; height: 24px; line-height: 24px;
+        position: relative; align-items: center;
+      }
+      .packet-list th, .packet-list td {
+        display: inline-block; overflow: hidden; white-space: nowrap;
+        text-overflow: ellipsis; padding: 0 4px; box-sizing: border-box;
+        border-bottom: 1px solid #222;
+      }
+      .packet-list td.pkt-c-nal, .packet-list th.pkt-c-nal { flex: 1 1 auto; }
+      .packet-list tbody tr:hover { filter: brightness(1.25); }
+      .pkt-row-psi   { background: #2d1b4e; }
+      .pkt-row-video { background: #1b2d4e; }
+      .pkt-row-audio { background: #1b4e2d; }
+      .pkt-row-ra    { background: #1a1a1a; box-shadow: inset 3px 0 0 #6f6; }
+      .pkt-row-error { background: #4e1b1b; }
+      .pkt-row-other { background: #2a2a2a; }
+      .pkt-row-selected { outline: 1px solid #6cf; outline-offset: -1px; }
+      .pkt-c-num  { color: #666; text-align: right; }
+      .pkt-c-kind { text-align: center; font-weight: bold; }
+      .pkt-actions {
+        position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+        opacity: 0; display: flex; gap: 2px; background: rgba(0,0,0,0.7);
+        padding: 1px 2px; border-radius: 2px; transition: opacity 0.1s;
+      }
+      .packet-list tbody tr:hover .pkt-actions { opacity: 1; }
+      .pkt-mini {
+        padding: 0 4px; font-size: 10px; line-height: 16px; height: 16px;
+        border: 1px solid #444; background: #222; color: #ddd;
+        cursor: pointer; border-radius: 2px;
+      }
+      .pkt-mini:hover { background: #333; }
+      .pkt-badge {
+        display: inline-block; padding: 0 3px; font-size: 9px;
+        line-height: 14px; border-radius: 2px; margin-left: 2px;
+      }
+      .pkt-badge-bad  { background: #4e1b1b; color: #f88; }
+      .pkt-badge-good { background: #1b4e2d; color: #8f8; }
+      .pkt-inspector { border: 1px solid #333; padding: 6px; font-size: 11px; max-height: 340px; overflow: auto; }
+      .pkt-inspector h4 {
+        margin: 6px 0 2px; color: #999; font-size: 10px;
+        text-transform: uppercase; letter-spacing: 0.5px;
+      }
+      .pkt-inspector h4:first-child { margin-top: 0; }
+      .pkt-inspector table { width: 100%; border-collapse: collapse; }
+      .pkt-inspector td { padding: 1px 4px; border-bottom: 1px solid #222; }
+      .pkt-inspector td:first-child { color: #999; width: 45%; }
+      .pkt-inspector td:last-child { color: #ddd; text-align: right; }
+      .pkt-warn { color: #fc6; }
+      .pkt-muted { color: #666; font-style: italic; }
     </style>
-</head>
-<body>
-    <h3>Publish (C++ engine worker)</h3>
-    <video id="preview" width="640" height="360" muted playsinline></video>
-    <div class="controls">
-        <button id="capture-btn">Capture</button>
-        <button id="publish-btn" disabled>Publish</button>
-        <button id="stop-btn" disabled>Stop</button>
+  </head>
+  <body>
+    <div>
+    <div class="video-pair">
+      <div class="video-slot">
+        <h2>Capture</h2>
+        <video id="preview" width="640" height="360" muted playsinline></video>
+        <div class="controls">
+          <select id="source-select">
+            <option value="screen">Screen</option>
+            <option value="webcam">Webcam</option>
+          </select>
+          <select id="camera-select" disabled style="display:none;"></select>
+          <button id="capture-btn">Capture</button>
+          <button id="publish-btn" disabled>Start Publishing</button>
+          <button id="stop-btn" disabled>Stop</button>
+          <button id="debug-toggle">debug</button>
+        </div>
+      </div>
+      <div class="video-slot">
+        <h2>Stream Back</h2>
+        <canvas id="playback-canvas" width="640" height="360"></canvas>
+        <div class="controls">
+          <button id="playback-toggle">play</button>
+          <button id="playback-mute" disabled class="muted">mute</button>
+          <label>latency: <input type="number" id="playback-latency" min="20" max="8000" step="10" value="120" />ms</label>
+        </div>
+      </div>
     </div>
-    <div class="controls">
-        <label>url: <input type="text" id="pub-url" size="28" value="wt://127.0.0.1:4435" /></label>
-        <label>stream: <input type="text" id="stream-name" size="10" /></label>
-        <label>latency: <input type="number" id="latency-num" min="20" max="8000" step="10" value="120" />ms</label>
+    <div class="controls capture-config">
+      <label>url: <input type="text" id="pub-url" size="28" value="wt://127.0.0.1:4435" /></label>
+      <label>stream: <input type="text" id="stream-name" size="10" /></label>
+      <label>latency: <input type="number" id="latency-num" min="20" max="8000" step="10" value="120" />ms</label>
+      <label>codec: <select id="codec-select"><option value="auto">auto</option></select></label>
     </div>
-    <div class="controls">
-        <label>codec: <select id="codec-select"><option value="auto">auto</option></select></label>
-        <label>bitrate: <input type="number" id="bitrate-num" min="0.5" max="50" step="0.5" value="4" />Mbps</label>
-        <label>framerate: <select id="framerate-select"><option>30</option><option>60</option></select></label>
-        <label>audio: <select id="audio-source"><option value="">(none)</option></select></label>
+    <div class="controls capture-config">
+      <label>bitrate: <input type="number" id="bitrate-num" min="0.5" max="50" step="0.5" value="4" />Mbps</label>
+      <label>framerate: <select id="framerate-select"><option>30</option><option>60</option></select></label>
+      <label>audio: <select id="audio-source"><option value="">(none)</option></select></label>
     </div>
-    <div class="controls"><a id="viewer-link" href="/" target="_blank" style="display:none;"></a></div>
-    <div id="status">idle</div>
-    <div id="pub-stats"></div>
-    <pre id="log"></pre>
+    <div class="controls" style="margin-top: 10px;">
+      <a id="viewer-link" href="/" target="_blank" style="display:none;"></a>
+    </div>
+    <div class="pub-stats" id="pub-stats-text"></div>
+    <div id="debug-root"></div>
     <script src="/cert-hash.js"></script>
     <script type="module" src="/bundle/publish.js"></script>
-</body>
+  </body>
 </html>

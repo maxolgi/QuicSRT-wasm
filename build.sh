@@ -97,13 +97,13 @@ case "${1:-}" in
         # emits page/bundle/main.js + page/bundle/publish.js
         # (--entry-names=[name]) plus chunk-[name]-[hash] files for shared
         # and lazily-imported code - notably the Preact debug panel
-        # (main.ts's dynamic import('./vendor/debug'), with preact/chart.js,
-        # and eruda behind its own dynamic import in ConsoleTab), which
-        # stays off the entries' critical path. The --jsx flags are for the
-        # .tsx page entries coming in later waves - harmless for the .ts
-        # entries bundled now. Deploy copies page/bundle/* wholesale, so
+        # (preact/chart.js, eruda behind its own dynamic import in
+        # ConsoleTab). main.ts dynamic-imports the panel so it stays off
+        # the viewer's critical path; publish.tsx (the .tsx entry the
+        # --jsx flags are for) imports the Panel directly, as the rust
+        # stream.tsx does. Deploy copies page/bundle/* wholesale, so
         # every chunk rides along.
-        "$ESBUILD" page/main.ts page/publish.ts --bundle --format=esm --splitting \
+        "$ESBUILD" page/main.ts page/publish.tsx --bundle --format=esm --splitting \
             --outdir=page/bundle --entry-names='[name]' --chunk-names='chunk-[name]-[hash]' \
             --jsx=automatic --jsx-import-source=preact
         ;;
