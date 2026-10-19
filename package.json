@@ -4,6 +4,10 @@
   "private": true,
   "description": "C++/WASM port of the QuicSRT player/publisher engine; esbuild bundles the page/",
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "@preact/signals-core": "1.14.4",
+    "chart.js": "4.5.1",
+    "eruda": "3.4.3",
+    "esbuild": "0.28.2",
+    "preact": "10.29.7"
   }
 }
