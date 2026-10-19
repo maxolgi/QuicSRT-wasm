@@ -13,8 +13,9 @@ Commands:
     engine   Build the M3 JS engine wrapper module (build/srt_engine.mjs,
              driven through js/srt_engine.js; gate: node js/test_contract.mjs)
     page     Bundle the M3 player page + M6 publisher page
-             (page/bundle/{app,worker,publish,publish_worker}.js) with the
-             local esbuild (package.json - npm install);
+             (page/bundle/{main,publish,worker,publish_worker}.js plus the
+             shared/lazy chunk-* files) with the local esbuild
+             (package.json - npm install);
              needs ./build.sh engine first
     deploy   Assemble the self-contained dist/ tree the supervised gateway
              serves as web_root: page html + page/bundle + the engine module
@@ -87,13 +88,24 @@ case "${1:-}" in
         mkdir -p page/bundle
         "$ESBUILD" page/vendor/worker.ts --bundle --format=esm \
             --external:../build/srt_engine.mjs --outfile=page/bundle/worker.js
-        "$ESBUILD" page/main.ts --bundle --format=esm --outfile=page/bundle/app.js
         # M6 publisher page: the worker bundles the vendored stream-worker.ts
         # (C++ engine + C++ muxer since M7); same --external treatment for
         # the emcc module.
         "$ESBUILD" page/vendor/stream-worker.ts --bundle --format=esm \
             --external:../build/srt_engine.mjs --outfile=page/bundle/publish_worker.js
-        "$ESBUILD" page/publish.ts --bundle --format=esm --outfile=page/bundle/publish.js
+        # Player + publisher entries in ONE esbuild run with --splitting:
+        # emits page/bundle/main.js + page/bundle/publish.js
+        # (--entry-names=[name]) plus chunk-[name]-[hash] files for shared
+        # and lazily-imported code - notably the Preact debug panel
+        # (main.ts's dynamic import('./vendor/debug'), with preact/chart.js,
+        # and eruda behind its own dynamic import in ConsoleTab), which
+        # stays off the entries' critical path. The --jsx flags are for the
+        # .tsx page entries coming in later waves - harmless for the .ts
+        # entries bundled now. Deploy copies page/bundle/* wholesale, so
+        # every chunk rides along.
+        "$ESBUILD" page/main.ts page/publish.ts --bundle --format=esm --splitting \
+            --outdir=page/bundle --entry-names='[name]' --chunk-names='chunk-[name]-[hash]' \
+            --jsx=automatic --jsx-import-source=preact
         ;;
     deploy)
         # Self-contained dist/ for the supervised gateway's web_root
@@ -102,7 +114,7 @@ case "${1:-}" in
         # self-relative .wasm ride along at dist/build/ to make that
         # import resolve when the gateway serves dist/ as-is.
         [ -f build/srt_engine.mjs ] || { echo "build/srt_engine.mjs missing - run ./build.sh engine first" >&2; exit 1; }
-        [ -f page/bundle/app.js ] || { echo "page/bundle/ missing - run ./build.sh page first" >&2; exit 1; }
+        [ -f page/bundle/main.js ] || { echo "page/bundle/ missing - run ./build.sh page first" >&2; exit 1; }
         rm -rf dist
         mkdir -p dist/bundle dist/build
         cp page/*.html dist/
