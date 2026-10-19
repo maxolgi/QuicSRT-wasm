@@ -1,0 +1,275 @@
+<!doctype html>
+<!-- 1:1 call page (ported from QuicSRT-rust web/call.html): pre-join
+     lobby (camera/mic pickers, room name, live preview), then the fixed
+     call view - the peer played back on canvas, a draggable PiP
+     self-view, mic/cam/speaker toggles, hangup - plus the vendored
+     Preact debug panel (page/vendor/debug). The seat protocol publishes
+     webcam+mic through the wasm publisher worker
+     (page/bundle/publish_worker.js: WebCodecs encode + the C++ TS mux +
+     the C++ wasm engine behind js/srt_engine.js as the SRT layer) and
+     plays the peer back through the wasm engine worker
+     (page/bundle/worker.js). wasm deltas: the module entry is the
+     pre-bundled /bundle/call.js, and the WT endpoint is the gateway
+     ingest default (wt://127.0.0.1:4435 shorthand for
+     https://127.0.0.1:4435/wt) instead of the rust page's ?host=/?port=
+     resolution. Served by the QuicSRT-gateway from dist/ (./build.sh
+     deploy; COOP/COEP on every response: the emcc engine uses pthreads,
+     which need a cross-origin-isolated context). The debug-panel CSS
+     below styles the vendored Preact panel mounted into #debug-root. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/quicsrt.png" />
+    <title>QuicSRT-wasm call</title>
+    <style>
+      body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #111;
+        color: #ddd;
+        margin: 0;
+        height: 100vh;
+        overflow: hidden;
+        transition: padding-right 0.2s ease;
+      }
+      body.resizing { transition: none; }
+      video, canvas { background: #000; display: block; }
+      .ok { color: #6f6; }
+      .err { color: #f66; }
+      .info { color: #6cf; }
+      input, button, select {
+        font: inherit; padding: 4px; background: #222; color: #ddd;
+        border: 1px solid #444; border-radius: 3px;
+      }
+      button:hover { background: #333; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      button.muted { opacity: 0.5; }
+
+      /* ── Pre-join (lobby) ─────────────────────────────────────── */
+      #prejoin {
+        height: 100vh; box-sizing: border-box;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .prejoin-card {
+        background: #181818; border: 1px solid #333; border-radius: 8px;
+        padding: 16px; width: min(480px, 92vw); box-sizing: border-box;
+      }
+      .prejoin-card h1 { font-size: 1.1rem; margin: 0 0 12px 0; }
+      #preview {
+        width: 100%; aspect-ratio: 16 / 9; object-fit: contain;
+        border-radius: 4px; transform: scaleX(-1);
+      }
+      .prejoin-row {
+        display: flex; gap: 8px; align-items: center; margin-top: 10px;
+      }
+      .prejoin-row label {
+        display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+      }
+      .prejoin-row select { flex: 1; min-width: 0; }
+      #room-name { width: 100%; box-sizing: border-box; }
+      #join-btn:not(:disabled) {
+        background: #1b5e20; color: #b9f6ca; border-color: #2e7d32;
+      }
+      #join-btn:not(:disabled):hover { background: #2e7d32; }
+      #prejoin-error { color: #f66; font-size: 12px; min-height: 1em; margin-top: 8px; }
+      .prejoin-hint { color: #777; font-size: 11px; margin-top: 8px; }
+
+      /* ── Call view ────────────────────────────────────────────── */
+      #call { position: fixed; top: 0; left: 0; bottom: 0; right: 0; display: none; }
+      #call.active { display: block; }
+      #remote-canvas {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        object-fit: contain;
+      }
+      #pip {
+        position: absolute; width: 224px; border: 1px solid #333;
+        border-radius: 6px; overflow: hidden; cursor: grab; z-index: 10;
+        background: #000;
+      }
+      #pip:active { cursor: grabbing; }
+      #pip video { width: 100%; height: auto; display: block; transform: scaleX(-1); }
+      #controls {
+        position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+        display: flex; gap: 8px; align-items: center; z-index: 20;
+        background: rgba(17, 17, 17, 0.85); border: 1px solid #333;
+        border-radius: 24px; padding: 8px 14px;
+      }
+      #hangup-btn {
+        background: #5c1a1a; color: #f6b3b3; border-color: #7f2d2d;
+      }
+      #hangup-btn:hover { background: #7f2d2d; }
+      #call-status {
+        position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+        font-size: 12px; color: #999; z-index: 20;
+        background: rgba(17, 17, 17, 0.7); padding: 2px 10px; border-radius: 10px;
+      }
+      #pub-stats-text {
+        position: absolute; top: 10px; left: 10px; font-size: 12px;
+        color: #999; z-index: 20; line-height: 1.6;
+      }
+
+      /* Dark-themed thin scrollbars */
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: #444 transparent;
+      }
+      *::-webkit-scrollbar { width: 8px; height: 8px; }
+      *::-webkit-scrollbar-track { background: transparent; }
+      *::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+      *::-webkit-scrollbar-thumb:hover { background: #555; }
+      *::-webkit-scrollbar-corner { background: transparent; }
+
+      /* Debug panel overlay */
+      #debug-root {
+        position: fixed; top: 0; right: 0; width: 34vw; height: 100vh;
+        background: rgba(17, 17, 17, 0.97); border-left: 1px solid #333;
+        z-index: 9999; display: none; flex-direction: column;
+        font-size: 12px; box-shadow: -4px 0 16px rgba(0,0,0,0.5);
+      }
+      #debug-root.visible { display: flex; }
+      .debug-resizer {
+        position: fixed; top: 0; right: 34vw; width: 7px; height: 100vh;
+        cursor: col-resize; z-index: 10001; background: transparent;
+        transition: background 0.15s; display: none;
+        transform: translateX(50%);
+      }
+      .debug-resizer.visible { display: block; }
+      .debug-resizer:hover, .debug-resizer.dragging { background: transparent; }
+
+      .debug-tabs {
+        display: flex; border-bottom: 1px solid #333; flex-shrink: 0;
+        overflow-x: auto;
+      }
+      .debug-tab {
+        padding: 6px 12px; cursor: pointer; border: none; background: none;
+        color: #888; border-bottom: 2px solid transparent; white-space: nowrap;
+        font: inherit; font-size: 12px;
+      }
+      .debug-tab.active { color: #6cf; border-bottom-color: #6cf; }
+      .debug-content {
+        flex: 1; overflow-y: auto; padding: 8px;
+      }
+      .debug-section { margin-bottom: 12px; }
+      .debug-section h3 {
+        font-size: 11px; color: #999; margin: 0 0 4px 0;
+        text-transform: uppercase; letter-spacing: 0.5px;
+      }
+      .debug-table { width: 100%; border-collapse: collapse; }
+      .debug-table td { padding: 2px 6px; border-bottom: 1px solid #222; }
+      .debug-table td:first-child { color: #999; width: 40%; }
+      .debug-table td:last-child { color: #ddd; text-align: right; font-family: inherit; }
+      .stat-good { color: #6f6; }
+      .stat-warn { color: #fc6; }
+      .stat-bad { color: #f66; }
+
+      .chart-container { position: relative; height: 120px; margin: 4px 0; }
+
+      /* Packet timeline + inspector (Demux tab) */
+      .pkt-live { font-size: 11px; color: #6cf; margin-bottom: 6px; }
+      .pkt-live .pkt-dot { color: #6f6; font-weight: bold; }
+      .pkt-filterbar { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; align-items: center; }
+      .pkt-filterbar input, .pkt-filterbar select { padding: 2px 4px; font-size: 11px; min-width: 0; }
+      .pkt-filterbar input[type="text"] { flex: 1 1 110px; }
+      .pkt-filterbar input[type="number"] { width: 64px; }
+      .packet-scroll { display: block; max-height: 300px; overflow: auto; border: 1px solid #333; }
+      .packet-list { display: block; width: 100%; border-collapse: collapse; font-size: 11px; }
+      .packet-list thead { display: block; position: sticky; top: 0; z-index: 1; background: #1a1a1a; }
+      .packet-list thead tr { background: #1a1a1a; }
+      .packet-list thead th {
+        color: #999; text-align: left; font-weight: normal;
+        padding: 0 4px; border-bottom: 1px solid #444;
+      }
+      .packet-list tbody { display: block; }
+      .packet-list tr {
+        display: flex; height: 24px; line-height: 24px;
+        position: relative; align-items: center;
+      }
+      .packet-list th, .packet-list td {
+        display: inline-block; overflow: hidden; white-space: nowrap;
+        text-overflow: ellipsis; padding: 0 4px; box-sizing: border-box;
+        border-bottom: 1px solid #222;
+      }
+      .packet-list td.pkt-c-nal, .packet-list th.pkt-c-nal { flex: 1 1 auto; }
+      .packet-list tbody tr:hover { filter: brightness(1.25); }
+      .pkt-row-psi   { background: #2d1b4e; }
+      .pkt-row-video { background: #1b2d4e; }
+      .pkt-row-audio { background: #1b4e2d; }
+      .pkt-row-ra    { background: #1a1a1a; box-shadow: inset 3px 0 0 #6f6; }
+      .pkt-row-error { background: #4e1b1b; }
+      .pkt-row-other { background: #2a2a2a; }
+      .pkt-row-selected { outline: 1px solid #6cf; outline-offset: -1px; }
+      .pkt-c-num  { color: #666; text-align: right; }
+      .pkt-c-kind { text-align: center; font-weight: bold; }
+      .pkt-actions {
+        position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+        opacity: 0; display: flex; gap: 2px; background: rgba(0,0,0,0.7);
+        padding: 1px 2px; border-radius: 2px; transition: opacity 0.1s;
+      }
+      .packet-list tbody tr:hover .pkt-actions { opacity: 1; }
+      .pkt-mini {
+        padding: 0 4px; font-size: 10px; line-height: 16px; height: 16px;
+        border: 1px solid #444; background: #222; color: #ddd;
+        cursor: pointer; border-radius: 2px;
+      }
+      .pkt-mini:hover { background: #333; }
+      .pkt-badge {
+        display: inline-block; padding: 0 3px; font-size: 9px;
+        line-height: 14px; border-radius: 2px; margin-left: 2px;
+      }
+      .pkt-badge-bad  { background: #4e1b1b; color: #f88; }
+      .pkt-badge-good { background: #1b4e2d; color: #8f8; }
+      .pkt-inspector { border: 1px solid #333; padding: 6px; font-size: 11px; max-height: 340px; overflow: auto; }
+      .pkt-inspector h4 {
+        margin: 6px 0 2px; color: #999; font-size: 10px;
+        text-transform: uppercase; letter-spacing: 0.5px;
+      }
+      .pkt-inspector h4:first-child { margin-top: 0; }
+      .pkt-inspector table { width: 100%; border-collapse: collapse; }
+      .pkt-inspector td { padding: 1px 4px; border-bottom: 1px solid #222; }
+      .pkt-inspector td:first-child { color: #999; width: 45%; }
+      .pkt-inspector td:last-child { color: #ddd; text-align: right; }
+      .pkt-warn { color: #fc6; }
+      .pkt-muted { color: #666; font-style: italic; }
+    </style>
+  </head>
+  <body>
+    <div id="prejoin">
+      <div class="prejoin-card">
+        <h1>QuicSRT-wasm Call</h1>
+        <video id="preview" width="640" height="360" muted playsinline></video>
+        <div class="prejoin-row">
+          <label>room: <input type="text" id="room-name" /></label>
+        </div>
+        <div class="prejoin-row">
+          <label>cam: <select id="camera-select"></select></label>
+        </div>
+        <div class="prejoin-row">
+          <label>mic: <select id="audio-source"></select></label>
+        </div>
+        <div class="prejoin-row">
+          <button id="join-btn" style="flex: 1;">Join Call</button>
+        </div>
+        <div id="prejoin-error"></div>
+        <div class="prejoin-hint">1080p30 &middot; 2 Mbps &middot; Opus &middot; share the room name with the other caller</div>
+      </div>
+    </div>
+
+    <div id="call">
+      <canvas id="remote-canvas" width="640" height="360"></canvas>
+      <div id="call-status"></div>
+      <div class="pub-stats" id="pub-stats-text"></div>
+      <div id="pip"></div>
+      <div id="controls">
+        <button id="mic-btn">mic on</button>
+        <button id="cam-btn">cam on</button>
+        <button id="speaker-btn">audio on</button>
+        <button id="debug-toggle">debug</button>
+        <button id="hangup-btn">hang up</button>
+      </div>
+    </div>
+
+    <div id="debug-root"></div>
+    <script src="/cert-hash.js"></script>
+    <script type="module" src="/bundle/call.js"></script>
+  </body>
+</html>
