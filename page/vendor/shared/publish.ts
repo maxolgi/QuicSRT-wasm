@@ -336,14 +336,31 @@ export function attachDebugResizer(opts: {
 
 // ─── Publish stats line ───────────────────────────────────────────
 
+// Measured uplink rate state: srt.bandwidthBps is SRT's available-link
+// estimate (huge on a LAN), not throughput. The real tx rate is the
+// txBytes/elapsedMs delta between consecutive stats messages (~1 Hz).
+// elapsedMs jumping backwards marks a new session (counters restart).
+let prevElapsedMs = -1;
+let prevTxBytes = -1;
+let lastTxMbps = 0;
+
 export function formatPubStats(srt: StatsMsg, enc: EncodeStats, targetFps: number): string {
-  const txMbps = (srt.bandwidthBps / 1e6).toFixed(1);
+  let txMbps = lastTxMbps;
+  if (prevElapsedMs < 0 || srt.elapsedMs < prevElapsedMs) {
+    txMbps = 0;
+  } else if (srt.elapsedMs > prevElapsedMs && prevTxBytes >= 0) {
+    const dSec = (srt.elapsedMs - prevElapsedMs) / 1000;
+    txMbps = (Math.max(0, srt.txBytes - prevTxBytes) * 8) / dSec / 1e6;
+  }
+  prevElapsedMs = srt.elapsedMs;
+  prevTxBytes = srt.txBytes;
+  lastTxMbps = txMbps;
   const txMB = (srt.txBytes / 1e6).toFixed(1);
   return (
     `<span class="${enc.fps >= targetFps - 5 ? 'ok' : 'err'}">${enc.fps} fps</span>` +
     ` | encode submit: ${enc.encodeMs.toFixed(1)}ms` +
     ` | queue: ${enc.queueDepth}` +
-    ` | <span class="info">\u2191${txMbps} Mbps</span>` +
+    ` | <span class="info">\u2191${txMbps.toFixed(1)} Mbps</span>` +
     ` | sent: ${txMB} MB` +
     ` | RTT: ${srt.rttMs.toFixed(0)}ms` +
     ` | loss: ${srt.txLoss}`
