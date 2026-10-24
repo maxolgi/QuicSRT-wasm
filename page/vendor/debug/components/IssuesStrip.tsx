@@ -1,7 +1,6 @@
 import type { JSX } from 'preact';
 import type { DebugStore } from '../store';
 import { useSignals } from '../useSignals';
-import { writeHash } from '../hash';
 import { computeIssues, type Issue } from '../issues';
 
 interface Props {
@@ -24,7 +23,6 @@ export function IssuesStrip({ store }: Props): JSX.Element | null {
   const navigate = (issue: Issue) => {
     store.activeTab.value = issue.tab;
     if (issue.demuxSub) store.demuxSubTab.value = issue.demuxSub;
-    writeHash(issue.tab, issue.demuxSub ?? undefined);
   };
 
   return (

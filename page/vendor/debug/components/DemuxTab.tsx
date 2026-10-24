@@ -1,8 +1,6 @@
-import { useEffect } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { DebugStore } from '../store';
 import { useSignals } from '../useSignals';
-import { readHash, writeHash } from '../hash';
 import type { DemuxStats } from '../../shared/types';
 import { streamTypeName } from './streamTypes';
 import { BitrateChart } from './charts/BitrateChart';
@@ -35,16 +33,6 @@ export function DemuxTab({ store }: Props): JSX.Element {
   useSignals(store.demuxStats, store.demuxSubTab);
 
   const subTab = store.demuxSubTab.value;
-  useEffect(() => {
-    const applySub = () => {
-      const { tab, demuxSub } = readHash();
-      const hit = tab === 'demux' ? SUB_TABS.find((t) => t.id === demuxSub) : undefined;
-      if (hit) store.demuxSubTab.value = hit.id;
-    };
-    applySub();
-    window.addEventListener('hashchange', applySub);
-    return () => window.removeEventListener('hashchange', applySub);
-  }, []);
 
   const d = store.demuxStats.value;
   if (!d) return <div>No demux stats yet — awaiting stream.</div>;
@@ -83,7 +71,7 @@ export function DemuxTab({ store }: Props): JSX.Element {
           <button
             key={t.id}
             class={`debug-tab ${subTab === t.id ? 'active' : ''}`}
-            onClick={() => { store.demuxSubTab.value = t.id; writeHash('demux', t.id); }}
+            onClick={() => { store.demuxSubTab.value = t.id; }}
           >
             {t.label}
           </button>
