@@ -45,7 +45,7 @@ export function SrtTab({ store }: Props): JSX.Element {
             {row('Uptime', `${(srt.elapsedMs / 1000).toFixed(1)} s`)}
             {row('RTT', `${srt.rttMs.toFixed(1)} ms`)}
             {row('RX Rate', lastBucket ? `${lastBucket.rxMbps.toFixed(1)} Mbps` : '—')}
-            {row('Link BW (est.)', `${(srt.bandwidthBps / 1_000_000).toFixed(1)} Mbps`)}
+            {row('Link BW', `${(srt.bandwidthBps / 1_000_000).toFixed(1)} Mbps`)}
             {row('RX Data Packets', `${srt.rxData}`)}
             {row('RX Bytes', `${(srt.rxBytes / 1024 / 1024).toFixed(2)} MB`)}
             {row('Loss', `${srt.rxLoss} (${lossRate.toFixed(2)}%)`, lossClass)}

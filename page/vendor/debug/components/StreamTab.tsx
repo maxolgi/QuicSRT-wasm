@@ -134,7 +134,7 @@ function SrtStatsTable({ store, srt, drift }: { store: DebugStore; srt: StatsMsg
           <tr><td>uptime</td><td>{elapsed}s</td></tr>
           <tr><td>RTT</td><td>{srt.rttMs.toFixed(1)}ms</td></tr>
           <tr><td>rx rate</td><td>{rxMbps}</td></tr>
-          <tr><td>link bw (est.)</td><td>{linkMbps} Mbps</td></tr>
+          <tr><td>link bw</td><td>{linkMbps} Mbps</td></tr>
           <tr><td>rx packets</td><td>{srt.rxData}</td></tr>
           <tr><td>rx bytes</td><td>{(srt.rxBytes / 1e6).toFixed(1)} MB</td></tr>
           <tr><td>loss</td><td class={lossCls}>{srt.rxLoss} ({lossRate}%)</td></tr>

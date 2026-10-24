@@ -201,7 +201,7 @@ testpub). Node gates first, all exit 0: `js/test_contract.mjs`,
 - TX stats while publishing (page line, 6 s apart): `LIVE ... sent:
   83.2 MB` -> `83.3 MB`, loss 0 (the `↑` number is the measured
   txBytes/elapsedMs tx rate; the SRT available-link-bandwidth estimate
-  it used to show is labeled `Link BW (est.)` in the player's SRT tab).
+  it used to show is labeled `Link BW` in the player's SRT tab).
 - Gateway `/stats` corroboration: `m6verA alive viewers 2` with the
   publisher session at 77420 messages received and both viewer sessions
   tx_data advancing; `browsertest` untouched alongside.
