@@ -10,7 +10,6 @@ import { RaTimeline } from './charts/RaTimeline';
 import { PtsJumpSparkline } from './charts/PtsJumpSparkline';
 import { PcrChart } from './charts/PcrChart';
 import { NalStackedBar } from './charts/NalStackedBar';
-import { PacketTimeline } from './PacketTimeline';
 
 const ST_H264 = 0x1b;
 const ST_HEVC = 0x24;
@@ -21,7 +20,6 @@ const SUB_TABS = [
   { id: 'streams', label: 'Streams' },
   { id: 'errors', label: 'Errors' },
   { id: 'video', label: 'Video' },
-  { id: 'packets', label: 'Packets' },
   { id: 'charts', label: 'Charts' },
 ] as const;
 
@@ -279,13 +277,6 @@ export function DemuxTab({ store }: Props): JSX.Element {
             </div>
           </div>
         </>
-      )}
-
-      {subTab === 'packets' && (
-        <div class="debug-section">
-          <h3>Packet Timeline</h3>
-          <PacketTimeline store={store} />
-        </div>
       )}
 
       {subTab === 'charts' && (

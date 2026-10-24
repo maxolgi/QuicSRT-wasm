@@ -94,19 +94,6 @@ export interface DemuxStats {
   nalStats: Float64Array;
   errorT: Float64Array;
   errorMsg: string[];
-  // Packet ring — populated by WASM, rendered by the packet-timeline commit.
-  ringT: Float64Array;
-  ringPid: Uint16Array;
-  ringKind: Uint8Array;
-  ringPts: Float64Array;
-  ringDts: Float64Array;
-  ringSize: Float64Array;
-  ringRa: Uint8Array;
-  ringTei: Uint8Array;
-  ringPusi: Uint8Array;
-  ringNal: Uint8Array;
-  ringNalOffsets: Uint32Array;
-  ringHex: string[];
 }
 
 // Plain-JSON form of DemuxStats (typed arrays → number[]) for the

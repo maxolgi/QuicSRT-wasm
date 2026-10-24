@@ -20,8 +20,8 @@
 //
 // NAL scanning lives in harness/nal.{h,cpp}; finalize_pes
 // scans start codes once per reassembled PES on video PIDs (stream_type
-// 0x1B/0x24) and feeds the event's nal tables, the per-PID nalStats and
-// the ring's per-row NAL summaries. SMPTE
+// 0x1B/0x24) and feeds the event's nal tables and the per-PID nalStats.
+// SMPTE
 // 302M lives in harness/aes3.{h,cpp}; finalize_pes decodes
 // BSSD PIDs' PES payloads to f32 and emits a kind-5 pcm event right
 // after the pes event. The audio metering
@@ -54,33 +54,10 @@ namespace {
 // ---- constants (lib.rs:29-56) -------------------------------------------------
 
 constexpr size_t TS_PACKET_SIZE = 188;
-constexpr size_t PACKET_RING_CAP = 500;
 constexpr size_t RECENT_ERRORS_CAP = 20;
 constexpr size_t BYTES_WINDOW_BUCKETS = 100; // 100 x ~100ms = 10s rolling window
 constexpr double BYTES_WINDOW_BUCKET_MS = 100.0;
 constexpr uint64_t PTS_JUMP_90K = 90000; // >1s delta in 90kHz units flags a jump
-
-// PacketEntry.kind values mirrored into the snapshot ring (lib.rs:37-43).
-constexpr uint8_t KIND_PAT = 0;
-constexpr uint8_t KIND_PMT = 1;
-constexpr uint8_t KIND_PES = 2;
-constexpr uint8_t KIND_RA = 3;
-constexpr uint8_t KIND_ERROR = 4;
-constexpr uint8_t KIND_OTHER = 255;
-
-constexpr size_t HEX_CAP_BYTES = 512; // ring hex cap (lib.rs:47)
-
-std::string HexPrefix(const uint8_t* p, size_t n) {
-    n = std::min(n, HEX_CAP_BYTES);
-    static const char* kDigits = "0123456789abcdef";
-    std::string s;
-    s.reserve(n * 2);
-    for (size_t i = 0; i < n; i++) {
-        s.push_back(kDigits[p[i] >> 4]);
-        s.push_back(kDigits[p[i] & 0xF]);
-    }
-    return s;
-}
 
 std::string Dec(uint64_t n) { return std::to_string(n); }
 
@@ -803,20 +780,6 @@ struct PcrStats {
     double jitter_ms_ema = 0.0;
 };
 
-struct PacketEntry {
-    double t_ms = 0.0;
-    uint16_t pid = 0;
-    uint8_t kind = KIND_OTHER;
-    int64_t pts = -1;
-    int64_t dts = -1;
-    uint32_t size = 0;
-    bool ra = false;
-    std::vector<uint8_t> nal_summary; // pes rows: that PES's nalTypes; else empty
-    bool tei = false;
-    bool pusi = false;
-    std::string hex;
-};
-
 struct PartialPes {
     std::optional<PesHeader> header;
     std::optional<size_t> declared_len;
@@ -975,20 +938,6 @@ struct TsdSnapshot {
     std::vector<std::string> error_msg;
     std::vector<const char*> error_msg_p;
 
-    std::vector<double> ring_t;
-    std::vector<uint16_t> ring_pid;
-    std::vector<uint8_t> ring_kind;
-    std::vector<double> ring_pts;
-    std::vector<double> ring_dts;
-    std::vector<double> ring_size;
-    std::vector<uint8_t> ring_ra;
-    std::vector<uint8_t> ring_tei;
-    std::vector<uint8_t> ring_pusi;
-    std::vector<uint8_t> ring_nal;
-    std::vector<uint32_t> ring_nal_offsets;
-    std::vector<std::string> ring_hex;
-    std::vector<const char*> ring_hex_p;
-
     // STRS views are rebuilt once all strings are final (the char* must not
     // outlive a move of their SSO storage).
     void FinishStrings() {
@@ -996,8 +945,6 @@ struct TsdSnapshot {
         for (const std::string& f : pmt_format_ids) pmt_format_ids_p.push_back(f.c_str());
         error_msg_p.clear();
         for (const std::string& m : error_msg) error_msg_p.push_back(m.c_str());
-        ring_hex_p.clear();
-        for (const std::string& h : ring_hex) ring_hex_p.push_back(h.c_str());
     }
 };
 
@@ -1037,19 +984,9 @@ struct TsDemuxer {
                    .count() * 1000.0;
     }
 
-    void PushPacket(PacketEntry e) {
-        packet_ring.push_back(std::move(e));
-        while (packet_ring.size() > PACKET_RING_CAP) packet_ring.pop_front();
-    }
-
     void PushError(double t_ms, const std::string& msg) {
         recent_errors.emplace_back(t_ms, msg);
         while (recent_errors.size() > RECENT_ERRORS_CAP) recent_errors.pop_front();
-        PacketEntry e;
-        e.t_ms = t_ms;
-        e.pid = 0;
-        e.kind = KIND_ERROR;
-        PushPacket(std::move(e));
     }
 
     const PmtEntry* PmtEntryFor(uint16_t pid) const {
@@ -1103,8 +1040,7 @@ struct TsDemuxer {
 
     // ---- finalize_pes (lib.rs:662-768)
     void FinalizePes(uint16_t pid, const PesHeader& hdr, const std::vector<uint8_t>& payload,
-                     bool ra, double t_ms, bool tei, bool pusi,
-                     std::vector<std::unique_ptr<TsEvent>>& events) {
+                     bool ra, std::vector<std::unique_ptr<TsEvent>>& events) {
         const int64_t pts = hdr.pts ? static_cast<int64_t>(*hdr.pts) : -1;
         const int64_t dts = hdr.dts ? static_cast<int64_t>(*hdr.dts) : -1;
         {
@@ -1125,7 +1061,7 @@ struct TsDemuxer {
         // NAL classification for video PIDs only, H.264 0x1B / HEVC 0x24
         // (lib.rs:696-729) - AV1 (OBU syntax) and audio PIDs carry no
         // Annex-B NAL units. Start codes are scanned ONCE here; offsets +
-        // type codes feed both the TsEvent and the PacketEntry (no re-scan).
+        // type codes feed the TsEvent (no re-scan).
         std::vector<uint32_t> nal_offsets;
         std::vector<uint8_t> nal_types;
         const PmtEntry* pmt_e = PmtEntryFor(pid);
@@ -1160,10 +1096,9 @@ struct TsDemuxer {
             }
         }
 
-        // Emit event with the pre-parsed NAL data (nal_types clones for
-        // the event; the original moves into the ring entry below).
+        // Emit event with the pre-parsed NAL data.
         events.push_back(std::make_unique<TsEvent>(TsEvent::Pes(
-            pid, hdr, payload, ra, std::move(nal_offsets), nal_types)));
+            pid, hdr, payload, ra, std::move(nal_offsets), std::move(nal_types))));
 
         if (IsSmpte302mPid(pid)) {
             // lib.rs:741-753: decode right after the pes event; the pcm
@@ -1178,30 +1113,15 @@ struct TsDemuxer {
                 const auto info = aes3::S302mInfoFromHeader(payload.data(), payload.size());
                 const uint8_t channel_count = info ? info->channel_count : 2;
                 meter_state.Update(pid, samples.data(), samples.size(), channel_count, pts);
-                events.push_back(std::make_unique<TsEvent>(
-                    TsEvent::Pcm(pid, pts, channel_count, std::move(samples))));
+                events.push_back(
+                    std::make_unique<TsEvent>(TsEvent::Pcm(pid, pts, channel_count, std::move(samples))));
             }
         }
-
-        PacketEntry e;
-        e.t_ms = t_ms;
-        e.pid = pid;
-        e.kind = KIND_PES;
-        e.pts = pts;
-        e.dts = dts;
-        e.size = static_cast<uint32_t>(payload.size());
-        e.ra = ra;
-        e.nal_summary = std::move(nal_types);
-        e.tei = tei;
-        e.pusi = pusi;
-        e.hex = HexPrefix(payload.data(), payload.size());
-        PushPacket(std::move(e));
     }
 
     // ---- handle_packet (lib.rs:770-985)
     void HandlePacket(const TsPacket& packet, std::vector<std::unique_ptr<TsEvent>>& events) {
         const auto now = std::chrono::steady_clock::now();
-        const double elapsed_ms = ElapsedMs();
         const uint16_t pid = packet.pid;
         const bool tei = packet.tei;
         const uint8_t cc = packet.cc;
@@ -1259,14 +1179,6 @@ struct TsDemuxer {
                 }
                 events.push_back(
                     std::make_unique<TsEvent>(TsEvent::RandomAccess(pid)));
-                PacketEntry e;
-                e.t_ms = elapsed_ms;
-                e.pid = pid;
-                e.kind = KIND_RA;
-                e.ra = true;
-                e.tei = tei;
-                e.pusi = pusi;
-                PushPacket(std::move(e));
             }
         }
 
@@ -1290,18 +1202,11 @@ struct TsDemuxer {
                     pmt_pid = pa.pmt_pid;
                     events.push_back(std::make_unique<TsEvent>(
                         TsEvent::Pat(pa.program_num, pa.pmt_pid)));
-                    PacketEntry e;
-                    e.t_ms = elapsed_ms;
-                    e.pid = pid;
-                    e.kind = KIND_PAT;
-                    e.tei = tei;
-                    e.pusi = pusi;
-                    PushPacket(std::move(e));
                 }
                 break;
             }
             case TsPacket::kPmt: {
-                HandlePmt(packet.pmt, elapsed_ms, tei, pusi, events);
+                HandlePmt(packet.pmt, events);
                 break;
             }
             case TsPacket::kPesStart: {
@@ -1338,10 +1243,9 @@ struct TsDemuxer {
                 AccumulateBytes(pid, pes_payload_len, now);
 
                 if (have_flush) {
-                    FinalizePes(pid, flushed_hdr, flushed_payload, flushed_ra, elapsed_ms, tei,
-                                pusi, events);
+                    FinalizePes(pid, flushed_hdr, flushed_payload, flushed_ra, events);
                 }
-                MaybeFlush(pid, elapsed_ms, tei, pusi, events);
+                MaybeFlush(pid, events);
                 break;
             }
             case TsPacket::kPesCont: {
@@ -1351,33 +1255,16 @@ struct TsDemuxer {
                                           packet.bytes.end());
                 }
                 AccumulateBytes(pid, packet.bytes.size(), now);
-                MaybeFlush(pid, elapsed_ms, tei, pusi, events);
+                MaybeFlush(pid, events);
                 break;
             }
             case TsPacket::kRaw: {
                 if (pmt_pid && *pmt_pid == pid) {
                     Pmt assembled;
                     if (AssemblePsi(pid, packet.bytes, pusi, &assembled)) {
-                        HandlePmt(assembled, elapsed_ms, tei, pusi, events);
+                        HandlePmt(assembled, events);
                     }
                 }
-                PacketEntry e;
-                e.t_ms = elapsed_ms;
-                e.pid = pid;
-                e.kind = KIND_OTHER;
-                e.tei = tei;
-                e.pusi = pusi;
-                PushPacket(std::move(e));
-                break;
-            }
-            case TsPacket::kNull: {
-                PacketEntry e;
-                e.t_ms = elapsed_ms;
-                e.pid = pid;
-                e.kind = KIND_OTHER;
-                e.tei = tei;
-                e.pusi = pusi;
-                PushPacket(std::move(e));
                 break;
             }
             default:
@@ -1430,9 +1317,7 @@ struct TsDemuxer {
     }
 
     // handle_pmt (lib.rs:987-1025)
-    void HandlePmt(const Pmt& pmt, double elapsed_ms, bool tei, bool pusi,
-                   std::vector<std::unique_ptr<TsEvent>>& events) {
-        const uint16_t row_pid = pmt_pid.value_or(0x1000);
+    void HandlePmt(const Pmt& pmt, std::vector<std::unique_ptr<TsEvent>>& events) {
         std::vector<PmtEntry> new_entries;
         std::vector<std::pair<uint16_t, uint8_t>> entries;
         std::vector<std::string> format_ids;
@@ -1452,18 +1337,10 @@ struct TsDemuxer {
 
         events.push_back(
             std::make_unique<TsEvent>(TsEvent::Pmt(entries, format_ids)));
-        PacketEntry row;
-        row.t_ms = elapsed_ms;
-        row.pid = row_pid;
-        row.kind = KIND_PMT;
-        row.tei = tei;
-        row.pusi = pusi;
-        PushPacket(std::move(row));
     }
 
     // maybe_flush (lib.rs:1027-1063)
-    void MaybeFlush(uint16_t pid, double elapsed_ms, bool tei, bool pusi,
-                    std::vector<std::unique_ptr<TsEvent>>& events) {
+    void MaybeFlush(uint16_t pid, std::vector<std::unique_ptr<TsEvent>>& events) {
         bool flush = false;
         {
             const auto it = partials.find(pid);
@@ -1485,7 +1362,7 @@ struct TsDemuxer {
         p.declared_len.reset();
         const bool ra = p.ra;
         p.ra = false;
-        FinalizePes(pid, hdr, payload, ra, elapsed_ms, tei, pusi, events);
+        FinalizePes(pid, hdr, payload, ra, events);
     }
 
     // ---- feed (lib.rs:507-524)
@@ -1585,22 +1462,6 @@ struct TsDemuxer {
             s->error_msg.push_back(err.second);
         }
 
-        s->ring_nal_offsets.push_back(0);
-        for (const PacketEntry& e : packet_ring) {
-            s->ring_t.push_back(e.t_ms);
-            s->ring_pid.push_back(e.pid);
-            s->ring_kind.push_back(e.kind);
-            s->ring_pts.push_back(e.pts < 0 ? -1.0 : static_cast<double>(e.pts));
-            s->ring_dts.push_back(e.dts < 0 ? -1.0 : static_cast<double>(e.dts));
-            s->ring_size.push_back(static_cast<double>(e.size));
-            s->ring_ra.push_back(e.ra ? 1 : 0);
-            s->ring_tei.push_back(e.tei ? 1 : 0);
-            s->ring_pusi.push_back(e.pusi ? 1 : 0);
-            s->ring_nal.insert(s->ring_nal.end(), e.nal_summary.begin(), e.nal_summary.end());
-            s->ring_nal_offsets.push_back(static_cast<uint32_t>(s->ring_nal.size()));
-            s->ring_hex.push_back(e.hex);
-        }
-
         s->program_num = program_num ? static_cast<int32_t>(*program_num) : -1;
         s->pmt_pid = pmt_pid ? static_cast<int32_t>(*pmt_pid) : -1;
         s->FinishStrings();
@@ -1646,7 +1507,6 @@ struct TsDemuxer {
     std::unordered_map<uint16_t, nal::NalStats> nal_stats;
 
     std::deque<std::pair<double, std::string>> recent_errors;
-    std::deque<PacketEntry> packet_ring;
 
     meter::MeterState meter_state; // one per demuxer, lifetime state
                                     // (lib.rs:474-475, 502)
@@ -1780,21 +1640,6 @@ int tsd_snap_field(const TsdSnapshot* s, int field, TsdFieldView* out) {
         case TSD_SNAP_ERROR_T: return ViewOf(out, s->error_t.data(), s->error_t.size(), TSD_F64);
         case TSD_SNAP_ERROR_MSG:
             return ViewOf(out, s->error_msg_p.data(), s->error_msg_p.size(), TSD_STRS);
-        case TSD_SNAP_RING_T: return ViewOf(out, s->ring_t.data(), s->ring_t.size(), TSD_F64);
-        case TSD_SNAP_RING_PID: return ViewOf(out, s->ring_pid.data(), s->ring_pid.size(), TSD_U16);
-        case TSD_SNAP_RING_KIND: return ViewOf(out, s->ring_kind.data(), s->ring_kind.size(), TSD_U8);
-        case TSD_SNAP_RING_PTS: return ViewOf(out, s->ring_pts.data(), s->ring_pts.size(), TSD_F64);
-        case TSD_SNAP_RING_DTS: return ViewOf(out, s->ring_dts.data(), s->ring_dts.size(), TSD_F64);
-        case TSD_SNAP_RING_SIZE:
-            return ViewOf(out, s->ring_size.data(), s->ring_size.size(), TSD_F64);
-        case TSD_SNAP_RING_RA: return ViewOf(out, s->ring_ra.data(), s->ring_ra.size(), TSD_U8);
-        case TSD_SNAP_RING_TEI: return ViewOf(out, s->ring_tei.data(), s->ring_tei.size(), TSD_U8);
-        case TSD_SNAP_RING_PUSI: return ViewOf(out, s->ring_pusi.data(), s->ring_pusi.size(), TSD_U8);
-        case TSD_SNAP_RING_NAL: return ViewOf(out, s->ring_nal.data(), s->ring_nal.size(), TSD_U8);
-        case TSD_SNAP_RING_NAL_OFFSETS:
-            return ViewOf(out, s->ring_nal_offsets.data(), s->ring_nal_offsets.size(), TSD_U32);
-        case TSD_SNAP_RING_HEX:
-            return ViewOf(out, s->ring_hex_p.data(), s->ring_hex_p.size(), TSD_STRS);
         default: return -1;
     }
 }

@@ -24,8 +24,7 @@
 // Staged state (the parity harness excludes exactly these until the
 // remaining M5 steps land): NAL scanning IS ported (harness/nal.{h,cpp}):
 // pes events on video PIDs (stream_type 0x1B/0x24) carry populated
-// nalOffsets/nalTypes and the snapshot's nalPids/nalStats/ringNal/
-// ringNalOffsets are live. SMPTE 302M decode IS ported
+// nalOffsets/nalTypes and the snapshot's nalPids/nalStats are live. SMPTE 302M decode IS ported
 // (harness/aes3.{h,cpp}): BSSD PIDs' pes events are followed by kind-5
 // pcm events (samples as f32, program_num the channel count). The audio
 // metering DSP IS ported (harness/meter.{h,cpp}): every 302M pcm decode
@@ -97,18 +96,6 @@ enum
     TSD_SNAP_NAL_STATS,
     TSD_SNAP_ERROR_T,
     TSD_SNAP_ERROR_MSG,
-    TSD_SNAP_RING_T,
-    TSD_SNAP_RING_PID,
-    TSD_SNAP_RING_KIND,
-    TSD_SNAP_RING_PTS,
-    TSD_SNAP_RING_DTS,
-    TSD_SNAP_RING_SIZE,
-    TSD_SNAP_RING_RA,
-    TSD_SNAP_RING_TEI,
-    TSD_SNAP_RING_PUSI,
-    TSD_SNAP_RING_NAL,
-    TSD_SNAP_RING_NAL_OFFSETS,
-    TSD_SNAP_RING_HEX,
 };
 
 // MeterSnapshotView field ids - census 1.4 accessor order.

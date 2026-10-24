@@ -25,7 +25,7 @@
 //     METHODS pmtEntries() pmtFormatIds(), and free(). Array getters
 //     return fresh JS-owned copies each call (the M5 data-return policy -
 //     same as wasm-bindgen's Vec getters).
-//   DebugSnapshot: the 37 census-1.3 properties + free().
+//   DebugSnapshot: the 25 census-1.3 properties + free().
 //   MeterSnapshotView: the 12 census-1.4 properties + free().
 //
 // Deltas vs the wasm-bindgen glue (documented, none consumer-visible):
@@ -202,9 +202,6 @@ const SNAPSHOT_FIELDS = {
     pcrPids: 18, pcrIntervalsMs: 19, pcrJitterMs: 20,
     nalPids: 21, nalStats: 22,
     errorT: 23, errorMsg: 24,
-    ringT: 25, ringPid: 26, ringKind: 27, ringPts: 28, ringDts: 29,
-    ringSize: 30, ringRa: 31, ringTei: 32, ringPusi: 33, ringNal: 34,
-    ringNalOffsets: 35, ringHex: 36,
 };
 
 const METER_FIELDS = {
