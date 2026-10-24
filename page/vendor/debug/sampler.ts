@@ -20,6 +20,14 @@ const SAMPLE_INTERVAL_MS = 100;
 
 let prevRxLoss = 0;
 let prevRxDropped = 0;
+// Receive-rate measurement state. srt.bandwidthBps is SRT's available-link
+// estimate (huge on a LAN), not the stream bitrate; the real receive rate is
+// the rxBytes/elapsedMs delta between fresh worker stats (~1 Hz, while this
+// sampler runs at 10 Hz - hold the last value between updates). elapsedMs
+// jumping backwards marks a reconnect (counters restart).
+let prevElapsedMs = -1;
+let prevRxBytes = -1;
+let lastRxMbps = 0;
 
 export function startSampler(
   store: DebugStore,
@@ -51,10 +59,21 @@ export function startSampler(
       const srtDropped = Math.max(0, srt.rxDropped - prevRxDropped);
       prevRxLoss = srt.rxLoss;
       prevRxDropped = srt.rxDropped;
+      let rxMbps = lastRxMbps;
+      if (prevElapsedMs < 0 || srt.elapsedMs < prevElapsedMs) {
+        rxMbps = 0;
+      } else if (srt.elapsedMs > prevElapsedMs && prevRxBytes >= 0) {
+        const dSec = (srt.elapsedMs - prevElapsedMs) / 1000;
+        rxMbps = (Math.max(0, srt.rxBytes - prevRxBytes) * 8) / dSec / 1e6;
+      }
+      prevElapsedMs = srt.elapsedMs;
+      prevRxBytes = srt.rxBytes;
+      lastRxMbps = rxMbps;
       const bucket: TimeSeriesBucket = {
         t: performance.now(),
         rttMs: srt.rttMs,
         bandwidthMbps: srt.bandwidthBps / 1e6,
+        rxMbps,
         lossRate: totalPkts > 0 ? srt.rxLoss / totalPkts : 0,
         videoQueueDepth: v?.decodeQueueSize ?? 0,
         audioQueueDepth: a?.decodeQueueSize ?? 0,

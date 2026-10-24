@@ -43,7 +43,7 @@ export function StreamTab({ store }: Props): JSX.Element {
         </table>
       </div>
 
-      {srt && <SrtStatsTable srt={srt} drift={drift} />}
+      {srt && <SrtStatsTable store={store} srt={srt} drift={drift} />}
 
       <CcErrorCounter store={store} />
 
@@ -114,11 +114,15 @@ function CcErrorCounter({ store }: { store: DebugStore }): JSX.Element {
   )
 }
 
-function SrtStatsTable({ srt, drift }: { srt: StatsMsg; drift: number | null }) {
+function SrtStatsTable({ store, srt, drift }: { store: DebugStore; srt: StatsMsg; drift: number | null }) {
+  useSignals(store.history)
+
   const lossRate = (srt.rxData + srt.rxLoss) > 0
     ? ((srt.rxLoss / (srt.rxData + srt.rxLoss)) * 100).toFixed(2)
     : '0.00'
-  const mbps = (srt.bandwidthBps / 1e6).toFixed(1)
+  const lastBucket = store.history.value[store.history.value.length - 1]
+  const rxMbps = lastBucket ? `${lastBucket.rxMbps.toFixed(1)} Mbps` : '—'
+  const linkMbps = (srt.bandwidthBps / 1e6).toFixed(1)
   const elapsed = (srt.elapsedMs / 1000).toFixed(0)
   const lossCls = parseFloat(lossRate) > 5 ? 'stat-bad' : parseFloat(lossRate) > 1 ? 'stat-warn' : 'stat-good'
 
@@ -129,7 +133,8 @@ function SrtStatsTable({ srt, drift }: { srt: StatsMsg; drift: number | null }) 
         <tbody>
           <tr><td>uptime</td><td>{elapsed}s</td></tr>
           <tr><td>RTT</td><td>{srt.rttMs.toFixed(1)}ms</td></tr>
-          <tr><td>bandwidth</td><td>{mbps} Mbps</td></tr>
+          <tr><td>rx rate</td><td>{rxMbps}</td></tr>
+          <tr><td>link bw (est.)</td><td>{linkMbps} Mbps</td></tr>
           <tr><td>rx packets</td><td>{srt.rxData}</td></tr>
           <tr><td>rx bytes</td><td>{(srt.rxBytes / 1e6).toFixed(1)} MB</td></tr>
           <tr><td>loss</td><td class={lossCls}>{srt.rxLoss} ({lossRate}%)</td></tr>

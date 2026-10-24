@@ -29,6 +29,7 @@ export interface TimeSeriesBucket {
   t: number;
   rttMs: number;
   bandwidthMbps: number;
+  rxMbps: number;
   lossRate: number;
   videoQueueDepth: number;
   audioQueueDepth: number;
