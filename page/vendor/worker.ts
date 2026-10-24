@@ -886,6 +886,18 @@ function getDemuxStats(): DemuxStatsMsg | undefined {
       nalStats: snap.nalStats,
       errorT: snap.errorT,
       errorMsg: snap.errorMsg,
+      ringT: snap.ringT,
+      ringPid: snap.ringPid,
+      ringKind: snap.ringKind,
+      ringPts: snap.ringPts,
+      ringDts: snap.ringDts,
+      ringSize: snap.ringSize,
+      ringRa: snap.ringRa,
+      ringTei: snap.ringTei,
+      ringPusi: snap.ringPusi,
+      ringNal: snap.ringNal,
+      ringNalOffsets: snap.ringNalOffsets,
+      ringHex: snap.ringHex,
     };
   } finally {
     snap.free();

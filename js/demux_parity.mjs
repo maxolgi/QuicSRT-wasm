@@ -20,7 +20,7 @@
 //    (§4.2) into the snapshot digest and - on the 302M fixtures -
 //    MeterSnapshot (§4.3) into the meter digest. PES bytes and PCM f32
 //    sample bits enter the digest via sha256 (bit-exact pinning);
-//    errorT/bitratesMbps stay excluded everywhere (§4.2, checked
+//    ringT/errorT/bitratesMbps stay excluded everywhere (§4.2, checked
 //    finite >= 0 only) so nothing leaks wall time into the baseline.
 //    Per-case counts (feeds/bytes/events/snaps/meters/kinds) gate the
 //    digests for sanity.
@@ -81,7 +81,7 @@ const EVENT_FIELDS = {
     pcm: ['pid', 'pts', 'streamType', 'programNum', 'sampleCount', 'samplesSha256'],
 };
 
-// DebugSnapshot §4.2: digested exactly. The wall-clock pair below is NOT
+// DebugSnapshot §4.2: digested exactly. The wall-clock trio below is NOT
 // in this list - it is asserted finite >= 0 and never digested.
 const SNAPSHOT_FIELDS = [
     'programNum', 'pmtPid',
@@ -90,8 +90,10 @@ const SNAPSHOT_FIELDS = [
     'ccErrors', 'teiCounts', 'pusiCounts', 'scramblingCounts', 'afControlCounts',
     'pcrPids', 'pcrIntervalsMs', 'pcrJitterMs',
     'nalPids', 'nalStats', 'errorMsg',
+    'ringPid', 'ringKind', 'ringPts', 'ringDts', 'ringSize', 'ringRa', 'ringTei',
+    'ringPusi', 'ringNal', 'ringNalOffsets', 'ringHex',
 ];
-const WALL_CLOCK_FIELDS = ['errorT', 'bitratesMbps']; // §4.2 excluded
+const WALL_CLOCK_FIELDS = ['ringT', 'errorT', 'bitratesMbps']; // §4.2 excluded
 
 // MeterSnapshot §4.3 (adopted verbatim):
 // all 12 fields digested raw - the baseline pins exact f32 bits, the

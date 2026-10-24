@@ -1,5 +1,5 @@
 {
-  "provenance": "recorded from harness/ts_demux at commit 121221ff1e43b23dfbff631c05f34a573e308fde, byte-parity vs the Rust oracle verified at that commit",
+  "provenance": "recorded from harness/ts_demux at commit 42c99914ae7a191838f042d4aef98978ad9166d4, byte-parity vs the Rust oracle verified at that commit",
   "cases": {
     "S1": {
       "feeds": 204,
@@ -16,7 +16,7 @@
         0
       ],
       "evDigest": "0e14696df8c545c30153849b753cd2eb494c7fd61a9925429702750acf11d74b",
-      "snapDigest": "ff2b2dd67245f58a403078ca3d148d1936fc17cac08883b9b55d918a6facdc92"
+      "snapDigest": "f32b1eb0a146a99249929d26f05ce9979afddf6d9fbb5635f55470a5770256fd"
     },
     "S2": {
       "feeds": 417,
@@ -33,7 +33,7 @@
         0
       ],
       "evDigest": "9b8e40b0e4bbe8b7ab1884ce9ec01533e841981157bf6b1adfdc2d54b367a0dc",
-      "snapDigest": "eeb90163764405a9e187b52f9b7c3836443fb94b387eb2d006962c3273ddca53"
+      "snapDigest": "e4ff27c26b0fb56471257364b4792722289e82ea958af1ee3d60ad433c75bf63"
     },
     "S3": {
       "feeds": 150,
@@ -50,7 +50,7 @@
         0
       ],
       "evDigest": "6bf095cb12e13249220297e3eea985dcb6939a75c9a19cebc454be5bf81566f3",
-      "snapDigest": "8e7a5cffb046304d8630016b06254b63f5c22c23571422e436a11362491ea982"
+      "snapDigest": "5b91cff16a1151605bb0a7b16b149efeb12dd28bcb89d02182e84127a09851ed"
     },
     "S4": {
       "feeds": 37,
@@ -67,7 +67,7 @@
         0
       ],
       "evDigest": "ac1b126b8f7946f20ad6e60dc38b6fcd712f2f7da2f259806aec9a65a7d981b2",
-      "snapDigest": "fc1f7214863c88506a44d9f45cb18e824c7aeb9882e6a728f0d8a3f7548bff90"
+      "snapDigest": "6fe2c0ed0e90e45b8c27dd1623ee71f9e4119155c56b65b74516bc7d05b5281d"
     },
     "S5": {
       "feeds": 445,
@@ -84,7 +84,7 @@
         94
       ],
       "evDigest": "68c6d1e6e2722050858010181d084f188a88e2077bc351e93a3a1f524599eaf0",
-      "snapDigest": "250900860fdc339312e9ec180a265b8b0cf8f6706392878ba6eb59c0d2210883",
+      "snapDigest": "d924ac74c25884c6eb78af32ea056ad37e7dacfc4c8944a04abaf93cbf53c1d8",
       "meterDigest": "50498858dc38f151c397cfb3af1a1f175bd1c382193f9e909c0972d0f6c3e364"
     },
     "S6": {
@@ -102,7 +102,7 @@
         94
       ],
       "evDigest": "559f634ac6f83191d3323316702f81e5ae1ad4503f2d65055b9679c2048f8a30",
-      "snapDigest": "3d6805ffa6c39d14ef60c19a702368336ae27a641e1ce83433cf61f1b4f1db10",
+      "snapDigest": "c45d829101e5a2d21f466800d0f5ed8054ca0b0b313cde401e3f8bec8bdb4afc",
       "meterDigest": "0725f965c01944bd52db7c0e1d21e7f7ac8ffb12ca4c4081f1bd30ee856a4c0f"
     },
     "S7": {
@@ -120,7 +120,7 @@
         71
       ],
       "evDigest": "5f6f679c7521cd125968930a2ad6a1ac168bfdc4657984eeccc12dc8f0b2450d",
-      "snapDigest": "ecb9e17636b0c821a1e3235770946a395865d5000a44b4e8be4779173c6dcb74",
+      "snapDigest": "7a82eaac0749f50d46054aa6a64eacef76bf0cccb71fa0e25171255ec8607fdb",
       "meterDigest": "daf3718b24277817a052c7cba7f779e8fb534e11493e2587f1619ae7ac06d4cd"
     },
     "S8": {
@@ -138,7 +138,7 @@
         0
       ],
       "evDigest": "229f5e0888f9b203fc9ac2bdd021c164263c94a25aa8d8f170e32c2e52e1cbf1",
-      "snapDigest": "b251a3d86b8a592cee3a28af1cae567710bbaa7869bc28116479aac39fd02ae5"
+      "snapDigest": "6cbcaa3cef093b8349f018b66c1a319f3a9f34615c219162b30c23a421168eea"
     },
     "S9": {
       "feeds": 84,
@@ -155,7 +155,7 @@
         0
       ],
       "evDigest": "fd7999ab194ea105c374a96787f030320f404e6fc7422467761f8843b66dbc67",
-      "snapDigest": "7522d399a5e77e8cdff41675450c6128542a57d127a7718e44136ba0a5cd2db8"
+      "snapDigest": "636e2d744916105342c9dce3c92ae82989a14a55decbcf4fba7c7766ca894fce"
     },
     "S10": {
       "feeds": 84,
@@ -172,7 +172,7 @@
         0
       ],
       "evDigest": "78b58f69d95ea0a0fe0b3a559696deaffccf9840b39656a7c3f377e6318f3eac",
-      "snapDigest": "036f4310049107dcd15d756c1520f3f8f241b2b6268d77052d9719e879e292b8"
+      "snapDigest": "5d575b0865342977e01ab6e0582c99e1e1d1086c8824755f4ef13ce7672556fd"
     },
     "C1 (S1 TEI)": {
       "feeds": 204,
@@ -189,7 +189,7 @@
         0
       ],
       "evDigest": "0e14696df8c545c30153849b753cd2eb494c7fd61a9925429702750acf11d74b",
-      "snapDigest": "c259075aa6c157aa1209aefbbc170eb0426373c8b0666f1bb15908df6085feb4"
+      "snapDigest": "d8d75ed71f2433794d4c230973b8d6043c6c1554b915d279c529ecc4ed95d5d0"
     },
     "C2 (S1 CC break)": {
       "feeds": 204,
@@ -206,7 +206,7 @@
         0
       ],
       "evDigest": "0e14696df8c545c30153849b753cd2eb494c7fd61a9925429702750acf11d74b",
-      "snapDigest": "6326d070fe13faaf83ac4a42bdadd36d6c9e9b149a59e998fcdf055956a58277"
+      "snapDigest": "ef01fe139c50d9477ec90bc9d74ac58bfc15c00f7f258fdc273516d02eac71d6"
     },
     "C3 (S1 CC break + discontinuity)": {
       "feeds": 204,
@@ -223,7 +223,7 @@
         0
       ],
       "evDigest": "0e14696df8c545c30153849b753cd2eb494c7fd61a9925429702750acf11d74b",
-      "snapDigest": "ecde5b4ec3822ba01ae36dbfb8d78f8c5c2168f659551754d43291e1637a9902"
+      "snapDigest": "ce528bace01dc77e112dff1e7891c6a735ce5bbac215ec133830004fd0747d2c"
     },
     "C4 (S1 truncated 123 B, then tail)": {
       "feeds": 2,
@@ -240,7 +240,7 @@
         0
       ],
       "evDigest": "0e14696df8c545c30153849b753cd2eb494c7fd61a9925429702750acf11d74b",
-      "snapDigest": "386ebc8901fd47cd06bd9f3d6df6fd523fc6cbf7181ee51f0d224e734c3a36b3"
+      "snapDigest": "eae0f79abaabf07290e0804243820f4fc07169f82dd3ebb10b91d61b86af84db"
     },
     "C5 (S1 join @ packet 200)": {
       "feeds": 171,
@@ -257,7 +257,7 @@
         0
       ],
       "evDigest": "8dc581f6aa532717468e710078b495dc3fcbc7cf470e672e0cf83f4b35d67f09",
-      "snapDigest": "7b3e218ac6f07bf5bc60f24999e7081fa085bbb21f05b743b39c3ae4cdc771c9"
+      "snapDigest": "7178abee68b5a90b1b1ff95ad45f5961aca865e59d8ab933ec8fdc12bf8acdfa"
     },
     "C6 (S1 misaligned @ 188*200+1)": {
       "feeds": 171,
@@ -274,7 +274,7 @@
         0
       ],
       "evDigest": "b0b783523c5eae76af1d3e955fb0117836df0994a40c398b620581ea09387733",
-      "snapDigest": "20f4806032d9fc5f32105acc739617f74bedbccbb0eb898fb5616599127b8d68"
+      "snapDigest": "91d87717f2b0184a5ff21df39bb71ac9ea8423937cdf94f7f0283628cc8af96d"
     },
     "C7 (S1 null span [10,60))": {
       "feeds": 204,
@@ -291,7 +291,7 @@
         0
       ],
       "evDigest": "f3407878a582d315dc9f29862d9483aa87f5a02cc8815fc5cdf38e3d71593606",
-      "snapDigest": "226edb15ebbdf078a745c7b138bd42ae2649ce68ad14ee5c76d068f224c0045b"
+      "snapDigest": "8a1a89266c2561321cb5230218763c44a2b549ecf12e191e153b14422e8f3077"
     },
     "C8 (S1 ++ S10 PAT/PMT republish)": {
       "feeds": 287,
@@ -308,7 +308,7 @@
         0
       ],
       "evDigest": "9a7dbef676cdf9a626ab034e525a7124c7468139b65f33e9dd6c8b434ef7b26c",
-      "snapDigest": "cf369d6e5b91bb55bcd452aab6da8a8e48fc4d07a89c0eae52f1413e80dca62b"
+      "snapDigest": "91103d2a00832d12f9362a75487be205e9ebd0325ed926a786bcb49d51fbe07f"
     },
     "C9 (S1 ++ S1 PTS jump)": {
       "feeds": 407,
@@ -325,7 +325,7 @@
         0
       ],
       "evDigest": "ee5bc6776014a38e49de5b5f6d8e8d4f6ab439daf16cea3a02bf207ea792972d",
-      "snapDigest": "4f3a00e13a5f7e109708b19f007cdddce029ce3a4163c739f01fbf4d8f28a5fb"
+      "snapDigest": "9e7faa4ed54dcebc80417f498aa9bc4ed5cef7bdd183b75f1be319a15348a121"
     },
     "S5-sel (meter ch1)": {
       "feeds": 445,
@@ -342,7 +342,7 @@
         94
       ],
       "evDigest": "68c6d1e6e2722050858010181d084f188a88e2077bc351e93a3a1f524599eaf0",
-      "snapDigest": "250900860fdc339312e9ec180a265b8b0cf8f6706392878ba6eb59c0d2210883",
+      "snapDigest": "d924ac74c25884c6eb78af32ea056ad37e7dacfc4c8944a04abaf93cbf53c1d8",
       "meterDigest": "62df56e0195208be91643af5b8c3d29a6d3399e3ae5a30af3c1ef9992d6f5bdd"
     },
     "S6-sel (meter ch1)": {
@@ -360,7 +360,7 @@
         94
       ],
       "evDigest": "559f634ac6f83191d3323316702f81e5ae1ad4503f2d65055b9679c2048f8a30",
-      "snapDigest": "3d6805ffa6c39d14ef60c19a702368336ae27a641e1ce83433cf61f1b4f1db10",
+      "snapDigest": "c45d829101e5a2d21f466800d0f5ed8054ca0b0b313cde401e3f8bec8bdb4afc",
       "meterDigest": "ed93b4b6de1eb3e42c0aadcb24a68167d5fcbfd905d1b3d3ead70bb056fce338"
     },
     "S7-sel (meter ch1)": {
@@ -378,7 +378,7 @@
         71
       ],
       "evDigest": "5f6f679c7521cd125968930a2ad6a1ac168bfdc4657984eeccc12dc8f0b2450d",
-      "snapDigest": "ecb9e17636b0c821a1e3235770946a395865d5000a44b4e8be4779173c6dcb74",
+      "snapDigest": "7a82eaac0749f50d46054aa6a64eacef76bf0cccb71fa0e25171255ec8607fdb",
       "meterDigest": "777ae32ef0bd048250c4223c6a067e27fb576b3d14b18d3dbad3bfc92c5d2377"
     }
   }

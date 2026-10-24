@@ -62,7 +62,8 @@ function formatStamp(): string {
 }
 
 // Typed arrays JSON-serialize as index-keyed objects, so flatten them to plain
-// arrays for the diagnostics export.
+// arrays for the diagnostics export. Packet-ring fields are omitted (large and
+// covered by the packet-timeline view in the panel itself).
 function serializeDemux(d: DemuxStats | null): DebugDiagnostics['demux'] {
   if (!d) return null;
   return {
