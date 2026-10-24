@@ -3,7 +3,7 @@ import type { JSX } from 'preact'
 import type { Chart } from 'chart.js'
 import type { DebugStore } from '../../store'
 import { useSignals } from '../../useSignals'
-import { drawFocusLine } from '../../timeline'
+import { WINDOW_SEC } from '../../timeline'
 
 interface Props {
   store: DebugStore
@@ -18,7 +18,7 @@ const PCR_TARGET_MS = 100
 // PCR interval over time for the first PCR PID, with a 100 ms reference line.
 // Jitter is shown in the DemuxTab table; here we focus on interval stability.
 export function PcrChart({ store, height = 120 }: Props): JSX.Element {
-  useSignals(store.demuxStats, store.timeWindowSec, store.focusTime)
+  useSignals(store.demuxStats)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const histRef = useRef<{ x: number; y: number }[]>([])
 
@@ -83,20 +83,6 @@ export function PcrChart({ store, height = 120 }: Props): JSX.Element {
             y: { beginAtZero: true, ticks: { color: '#999', font: { size: 10 } } },
           },
         },
-        plugins: [
-          {
-            id: 'focusLine',
-            afterDraw(chart) {
-              const ft = store.focusTime.value
-              if (ft === null) return
-              const s = chart.scales.x
-              if (!s) return
-              const px = s.getPixelForValue(ft)
-              if (px < s.left || px > s.right) return
-              drawFocusLine(chart.ctx, px, s.top, s.bottom)
-            },
-          },
-        ],
       })
 
       intervalId = setInterval(() => {
@@ -109,11 +95,8 @@ export function PcrChart({ store, height = 120 }: Props): JSX.Element {
         }
         const all = histRef.current
         const refT = all[all.length - 1]?.x
-        const wSec = store.timeWindowSec.value
         const view =
-          wSec > 0 && refT !== undefined
-            ? all.filter((p) => p.x >= refT - wSec * 1000)
-            : all
+          refT !== undefined ? all.filter((p) => p.x >= refT - WINDOW_SEC * 1000) : all
         const ds = chart.data.datasets
         ds[0].data = view.slice()
         ds[1].data = view.map((p) => ({ x: p.x, y: PCR_TARGET_MS }))

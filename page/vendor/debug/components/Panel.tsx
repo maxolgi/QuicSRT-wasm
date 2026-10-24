@@ -8,7 +8,6 @@ import { DemuxTab } from './DemuxTab'
 import { ConsoleTab } from './ConsoleTab'
 import { TestTab } from './TestTab'
 import { AudioTab } from './AudioTab'
-import { TimeRangeControl } from './TimeRangeControl'
 
 interface Props {
   store: DebugStore
@@ -43,7 +42,6 @@ export function DebugPanel({ store }: Props) {
           </button>
         ))}
       </div>
-      <TimeRangeControl store={store} />
       <div class="debug-content">
         {activeTab === 'stream' && <StreamTab store={store} />}
         {activeTab === 'codec' && <CodecTab store={store} />}

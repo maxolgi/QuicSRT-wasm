@@ -4,7 +4,7 @@ import type { Chart } from 'chart.js'
 import type { DebugStore } from '../../store'
 import type { TimeSeriesBucket } from '../../types'
 import { useSignals } from '../../useSignals'
-import { windowed, drawFocusLine } from '../../timeline'
+import { windowed } from '../../timeline'
 
 interface Props {
   store: DebugStore
@@ -28,7 +28,7 @@ export function TimeSeriesChart({
   transform,
   height = 120,
 }: Props): JSX.Element {
-  useSignals(store.history, store.timeWindowSec, store.focusTime)
+  useSignals(store.history)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   // Keep latest function props without re-subscribing the effect.
@@ -64,7 +64,7 @@ export function TimeSeriesChart({
             {
               label,
               data: extractPoints(
-                windowed(store.history.value, store.timeWindowSec.value),
+                windowed(store.history.value),
                 field,
                 transformRef.current,
               ),
@@ -80,11 +80,6 @@ export function TimeSeriesChart({
           animation: false,
           responsive: true,
           maintainAspectRatio: false,
-          onClick: (evt, _els, chart) => {
-            if (evt.x == null) return
-            const v = chart.scales.x.getValueForPixel(evt.x)
-            store.focusTime.value = typeof v === 'number' && isFinite(v) ? v : null
-          },
           plugins: {
             legend: { display: false },
             tooltip: {
@@ -106,20 +101,6 @@ export function TimeSeriesChart({
             },
           },
         },
-        plugins: [
-          {
-            id: 'focusLine',
-            afterDraw(chart) {
-              const ft = store.focusTime.value
-              if (ft === null) return
-              const s = chart.scales.x
-              if (!s) return
-              const px = s.getPixelForValue(ft)
-              if (px < s.left || px > s.right) return
-              drawFocusLine(chart.ctx, px, s.top, s.bottom)
-            },
-          },
-        ],
       })
 
       intervalId = setInterval(() => {
@@ -127,7 +108,7 @@ export function TimeSeriesChart({
         const ds = chart.data.datasets
         if (ds.length > 0) {
           ds[0].data = extractPoints(
-            windowed(store.history.value, store.timeWindowSec.value),
+            windowed(store.history.value),
             field,
             transformRef.current,
           )

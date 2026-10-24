@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'preact/hooks'
 import type { JSX } from 'preact'
 import type { DebugStore } from '../../store'
 import { useSignals } from '../../useSignals'
-import { windowed, xForTime, drawFocusLine } from '../../timeline'
+import { windowed } from '../../timeline'
 
 interface Props {
   store: DebugStore
@@ -14,7 +14,7 @@ const MAX_POINTS = 120
 // CC-error intensity over time. Mirrors LossHeatmap: green when clean, red
 // scaling with the bucket's total CC-error count.
 export function CcHeatmap({ store, height = 40 }: Props): JSX.Element {
-  useSignals(store.history, store.timeWindowSec, store.focusTime)
+  useSignals(store.history)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   useEffect(() => {
@@ -32,10 +32,8 @@ export function CcHeatmap({ store, height = 40 }: Props): JSX.Element {
     ctx.fillStyle = '#1a1a1a'
     ctx.fillRect(0, 0, w, height)
 
-    const points = windowed(store.history.value, store.timeWindowSec.value).slice(-MAX_POINTS)
+    const points = windowed(store.history.value).slice(-MAX_POINTS)
     if (points.length === 0) return
-    const tMin = points[0].t
-    const tMax = points[points.length - 1].t
 
     const cellW = w / Math.max(points.length, 1)
     for (let i = 0; i < points.length; i++) {
@@ -50,24 +48,11 @@ export function CcHeatmap({ store, height = 40 }: Props): JSX.Element {
       }
       ctx.fillRect(i * cellW, 0, cellW + 1, height)
     }
-
-    const ft = store.focusTime.value
-    if (ft !== null && ft >= tMin && ft <= tMax) {
-      drawFocusLine(ctx, xForTime(0, w, tMin, tMax, ft), 0, height)
-    }
   })
 
   return (
     <canvas
       ref={canvasRef}
-      onClick={(e) => {
-        const pts = windowed(store.history.value, store.timeWindowSec.value).slice(-MAX_POINTS)
-        if (pts.length === 0) return
-        const tMin = pts[0].t
-        const tMax = pts[pts.length - 1].t
-        const right = e.currentTarget.clientWidth
-        store.focusTime.value = tMin + ((e.offsetX / right) * (tMax - tMin))
-      }}
       style={{ width: '100%', height: `${height}px`, display: 'block' }}
     />
   )
