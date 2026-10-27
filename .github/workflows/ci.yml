@@ -17,10 +17,25 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Built in a Debian 13 (trixie) container (SlopShady's build-linux
+  # pattern): pins the build environment (cmake/make/python/node) instead
+  # of the rolling ubuntu runner image. The dist/ output is pure
+  # Emscripten + js, so only build tools are needed - no native libs.
   build-dist:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    container: debian:trixie
     timeout-minutes: 60
     steps:
+      # Must precede checkout: git is not in the base image and checkout
+      # falls back to a REST download (no submodules) without it.
+      # python3 + xz-utils: emsdk downloads/unpacks the 6.0.8 toolchain;
+      # build-essential + cmake: the emcmake/make build in ./build.sh lib.
+      - name: Install build deps (Debian trixie)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git python3 xz-utils \
+            build-essential cmake
       - uses: actions/checkout@v5
       - name: Install Emscripten
         # build.sh sources ~/emsdk/emsdk_env.sh, so emsdk must live at
@@ -30,6 +45,13 @@ jobs:
           git clone --depth 1 https://github.com/emscripten-core/emsdk "$HOME/emsdk"
           "$HOME/emsdk/emsdk" install 6.0.8
           "$HOME/emsdk/emsdk" activate 6.0.8
+      - name: Setup node
+        # ubuntu runner images preinstall node; the bare trixie container
+        # does not. node 22 matches the runner image the gates ran on.
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
       - name: Setup (deps/libquicsrt + nested deps/srt)
         run: ./build.sh setup
       - name: Build libquicsrt receiver-only + srt (Emscripten)

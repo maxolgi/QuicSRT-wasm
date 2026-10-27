@@ -18,7 +18,7 @@ gates now pin the port to the committed golden baselines, standalone.
 - `./build.sh deploy` — assemble the self-contained dist/ the gateway
   serves as web_root (index/publish/call.html + assets; needs page)
 - CI (`.github/workflows/ci.yml`) — the full chain + the node gates on
-  GitHub Actions (ubuntu-24.04, emsdk 6.0.8 at ~/emsdk); uploads dist/
+  GitHub Actions (debian:trixie container, emsdk 6.0.8 at ~/emsdk); uploads dist/
   as a workflow artifact and publishes `quicsrt-wasm-dist.zip` as a
   GitHub release on master pushes (`dev-<short_sha>`, latest) and `v*`
   tags (stable)
