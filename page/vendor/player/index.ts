@@ -29,6 +29,8 @@ export interface PlayerOptions {
   decodeInWorker?: boolean;
   /** VideoDecoder hardwareAcceleration preference. Default 'prefer-hardware'. */
   hwMode?: 'prefer-hardware' | 'prefer-software';
+  /** Sink worker-decoded audio into the viewer's <audio>/mute path (decodeInWorker mode). Default false. */
+  workerAudio?: boolean;
   /** Auto-reconnect on disconnect. Default true. Set false for custom reconnection. */
   autoReconnect?: boolean;
   /** Override worker URL for non-Vite embedding. See ViewerConfig.workerUrl. */
@@ -126,6 +128,7 @@ class Player extends EventTarget implements PlayerHandle {
       latencyMs: opts.latencyMs ?? 120,
       decodeInWorker: opts.decodeInWorker ?? false,
       hwMode: opts.hwMode,
+      workerAudio: opts.workerAudio,
       autoReconnect: opts.autoReconnect ?? true,
       workerUrl: opts.workerUrl,
       url: opts.url,

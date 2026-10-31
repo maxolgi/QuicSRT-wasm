@@ -85,6 +85,11 @@ export interface ViewerConfig {
    *  pipeline (decodeInWorker mode only; main-thread decode keeps the
    *  localStorage 'quicsrt-hw-mode' default). Default 'prefer-hardware'. */
   hwMode?: 'prefer-hardware' | 'prefer-software';
+  /** In decodeInWorker mode, sink worker-decoded audio (AudioData) through a
+   *  MediaStreamTrackGenerator into the viewer's standard <audio>/mute path
+   *  instead of emitting onDecodedAudio (default — host owns the AudioData
+   *  lifecycle). No effect when decodeInWorker is false. */
+  workerAudio?: boolean;
   /** When true (default), auto-reconnect with exponential backoff on disconnect.
    *  Set to false for apps that manage their own reconnection lifecycle. */
   autoReconnect?: boolean;
@@ -152,6 +157,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     getStreamName,
     decodeInWorker = false,
     hwMode,
+    workerAudio = false,
     autoReconnect = true,
     workerUrl,
     url: configUrl,
@@ -182,6 +188,8 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
   let renderer: CanvasRenderer | null = null;
   let audioEl: HTMLAudioElement | null = null;
   let audioReady = false;
+  let workerAudioWriter: WritableStreamDefaultWriter<AudioData> | null = null;
+  let workerAudioFailed = false;
   let reconnectTimer: number | null = null;
   let reconnectAttempts = 0;
   let manualDisconnect = false;
@@ -250,6 +258,8 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     activePcmPid = null;
     renderer?.destroy();
     renderer = null;
+    try { workerAudioWriter?.close(); } catch {}
+    workerAudioWriter = null;
     if (audioEl) { try { audioEl.pause(); } catch {} audioEl.srcObject = null; audioEl.remove(); }
     audioEl = null;
     audioReady = false;
@@ -360,8 +370,12 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
         onConfigured: (info) => ui.onVideoConfigured(info),
       });
     } else {
-      // Frame pump mode: no renderer, no main-side pipeline.
-      // The worker transfers decoded frames; we emit them via ui callbacks.
+      // Worker-decode mode: no main-side pipeline. With a canvas the
+      // transferred frames render locally (renderer owns the frames);
+      // without one they go raw to the host via ui.onDecodedFrame.
+      if (canvas) {
+        renderer = new CanvasRenderer(canvas!);
+      }
     }
 
     const authToken = token ?? new URLSearchParams(location.search).get('token') ?? undefined;
@@ -461,10 +475,43 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
           firstFrame = false;
           ui.onFirstFrame(msg.frame.displayWidth, msg.frame.displayHeight);
         }
-        ui.onDecodedFrame?.(msg.frame);
+        if (renderer) renderer.draw(msg.frame); // worker-render mode: renderer owns the frame
+        else ui.onDecodedFrame?.(msg.frame);
         break;
       case 'audioData':
-        ui.onDecodedAudio?.(msg.data);
+        if (workerAudio) {
+          if (!audioReady && !workerAudioFailed) {
+            // Lazy sink, mirroring wireAudio(): MSTG → <audio> → mute path.
+            // The pipeline vars stay null in worker mode.
+            try {
+              const gen = new MediaStreamTrackGenerator({ kind: 'audio' });
+              workerAudioWriter = gen.writable.getWriter();
+              if (!audioEl) {
+                audioEl = document.createElement('audio');
+                document.body.appendChild(audioEl);
+              }
+              audioEl.srcObject = new MediaStream([gen]);
+              audioEl.muted = mutedState;
+              log(mutedState ? 'audio ready (muted — click to unmute)' : 'audio ready', 'info');
+              if (muteBtn) { muteBtn.disabled = false; muteBtn.classList.toggle('muted', mutedState); }
+              audioReady = true;
+              ui.onAudioReady();
+            } catch (e) {
+              // e.g. no MediaStreamTrackGenerator in old browsers: log once,
+              // fall back to closing the data, never retry.
+              workerAudioFailed = true;
+              log(`worker audio sink failed: ${e}`, 'err');
+            }
+          }
+          if (workerAudioWriter) {
+            // On success the generator owns the data; close only on failure.
+            workerAudioWriter.write(msg.data).catch(() => { try { msg.data.close(); } catch {} });
+          } else {
+            msg.data.close();
+          }
+        } else {
+          ui.onDecodedAudio?.(msg.data);
+        }
         break;
       case 'videoPes':
         video?.feed(msg.data, msg.pts, msg.isKeyframe, msg.dts, msg.nalOffsets, msg.nalTypes);
