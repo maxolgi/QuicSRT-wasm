@@ -81,6 +81,10 @@ export interface ViewerConfig {
    *  to main. The SDK does NOT create a CanvasRenderer, VideoPipeline, or <audio> element.
    *  The host receives frames via the ViewerUi.onDecodedFrame / onDecodedAudio callbacks. */
   decodeInWorker?: boolean;
+  /** VideoDecoder hardwareAcceleration preference forwarded to the worker's
+   *  pipeline (decodeInWorker mode only; main-thread decode keeps the
+   *  localStorage 'quicsrt-hw-mode' default). Default 'prefer-hardware'. */
+  hwMode?: 'prefer-hardware' | 'prefer-software';
   /** When true (default), auto-reconnect with exponential backoff on disconnect.
    *  Set to false for apps that manage their own reconnection lifecycle. */
   autoReconnect?: boolean;
@@ -147,6 +151,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     maxReconnectDelayMs = 30000,
     getStreamName,
     decodeInWorker = false,
+    hwMode,
     autoReconnect = true,
     workerUrl,
     url: configUrl,
@@ -410,6 +415,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
         certHash: hashBytes,
         latencyMs,
         decodeInWorker,
+        hwMode,
         // Workers cannot read localStorage — forward the debug flag.
         verbose: typeof localStorage !== 'undefined' && localStorage.getItem('quicsrt-debug') === '1',
       },
