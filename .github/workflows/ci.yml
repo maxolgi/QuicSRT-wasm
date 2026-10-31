@@ -83,6 +83,13 @@ jobs:
             ca-certificates curl git python3 xz-utils \
             build-essential cmake
       - uses: actions/checkout@v5
+      # Steps run as root in the container but the bind-mounted workspace
+      # is owned by the host runner user, so the submodule init in
+      # ./build.sh setup dies with "dubious ownership" (checkout sets
+      # safe.directory only in its own temporary HOME). This writes the
+      # persistent $HOME/.gitconfig (/github/home) for the whole job.
+      - name: Trust the workspace repo
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install Emscripten
         # build.sh sources ~/emsdk/emsdk_env.sh, so emsdk must live at
         # exactly that path. 6.0.8 is the toolchain the port was built
