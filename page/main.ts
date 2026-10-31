@@ -26,6 +26,12 @@ if (decodeParam === 'software' || decodeParam === 'hardware') {
   localStorage.setItem('quicsrt-hw-mode', decodeParam === 'software' ? 'prefer-software' : 'prefer-hardware');
 }
 
+// ?worker=1: opt-in worker-decode mode exercising the embedded-host path
+// (the same one SlopShady runs) — frames decode in the engine worker and
+// render SDK-side onto the canvas below, with worker-decoded audio sunk
+// through the standard <audio>/mute path.
+const workerMode = new URLSearchParams(location.search).get('worker') === '1';
+
 // --- Pacing persistence (render ON / decode OFF by default, as in advanced.tsx) ---
 const savedRenderPacing = localStorage.getItem('quicsrt-pacing-render') !== '0';
 const savedDecodePacing = localStorage.getItem('quicsrt-pacing-decode') === '1';
@@ -39,6 +45,15 @@ const handle = mountPlayer(canvas, {
   renderPacing: savedRenderPacing,
   decodePacing: savedDecodePacing,
   workerUrl: '/bundle/worker.js',
+  // Worker mode: the localStorage seed above is inert (the worker cannot
+  // read it), so ?decode= maps to the init-time hwMode option instead.
+  ...(workerMode ? {
+    decodeInWorker: true,
+    workerAudio: true,
+    hwMode:
+      decodeParam === 'software' ? 'prefer-software' as const :
+      decodeParam === 'hardware' ? 'prefer-hardware' as const : undefined,
+  } : {}),
 });
 
 // --- Controls ---
