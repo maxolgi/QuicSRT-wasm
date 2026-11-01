@@ -103,9 +103,10 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // --- Quality selector (manual + auto ABR rung switching) ---
-// ?rungs= is the comma-separated rendition-suffix ladder the gateway
-// transcoder publishes as ${base}_${suffix} (the source itself is ${base});
-// default matches its 288p,216p. ?rungs=none (or empty) hides the control.
+// ?rungs= is the comma-separated rendition-suffix ladder the test
+// publisher simulcasts as ${base}_${suffix} (the source itself is
+// ${base}); default matches its 540p rung. ?rungs=none (or empty)
+// hides the control.
 // setStream records the name for the next connect and reconnects immediately
 // when active; a watchdog reverts to the last 'playing'-confirmed selection
 // and disables a rung that never came up — 10 s, or 12 s when the target is
@@ -115,7 +116,7 @@ document.addEventListener('visibilitychange', () => {
 // freeze); see switchTo below.
 // The default 'auto' option drives the same switch machinery from the
 // vendored ABR engine: one rung per decision, fed ~1 Hz from 'stats'.
-const rungsParam = new URLSearchParams(location.search).get('rungs') ?? '288p,216p';
+const rungsParam = new URLSearchParams(location.search).get('rungs') ?? '540p';
 const baseStream = new URLSearchParams(location.search).get('stream') ?? 'default';
 const qualitySel = document.getElementById('quality') as HTMLSelectElement;
 // Ladder top-down = option order after 'auto': the source ('') then the
