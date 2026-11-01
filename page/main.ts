@@ -109,8 +109,8 @@ document.addEventListener('visibilitychange', () => {
 // hides the control.
 // setStream records the name for the next connect and reconnects immediately
 // when active; a watchdog reverts to the last 'playing'-confirmed selection
-// and disables a rung that never came up — 10 s, or 12 s when the target is
-// the source rung (its ~8.3 s GOP legitimately delays the first frame).
+// and disables a rung that never came up — 12 s for the source rung, 10 s
+// for rendition rungs (conservative revert windows; every rung's GOP is 2 s).
 // Rendition targets on an active player instead switch by overlap: a hidden
 // second player pre-joins and swaps in on its first rendered frame (no
 // freeze); see switchTo below.
@@ -237,19 +237,19 @@ function armWatchdog() {
   }, qualitySel.value === '' ? 12000 : 10000);
 }
 
-// The switch funnel shared by manual picks and stepRung. Source rung or
-// an idle active player: serial — setStream reconnects the active player
-// itself, the watchdog reverts a target that never comes up. Rendition
-// target on an active player: overlap — the hidden player pre-joins
-// while the active one keeps playing, so the visible stage never freezes.
+// The switch funnel shared by manual picks and stepRung. An idle active
+// player: serial — setStream records the name for the next connect (no
+// overlap needed, nothing is playing). Any target on an ACTIVE player:
+// overlap — the hidden player pre-joins while the active one keeps
+// playing, so the visible stage never freezes. (The source rung used to
+// switch serially for the transcoder's chain offset; with publisher
+// simulcast all rungs share one timeline, so it overlaps like the rest.)
 function switchTo(value: string) {
   const p = players[activeIdx];
-  if (value === '' || p.state === 'idle') {
-    // A serial target supersedes a pending overlap: drop the pre-join.
+  if (p.state === 'idle') {
+    // Nothing is playing: record the name; the next connect() uses it.
     cancelOverlap();
     p.setStream(streamFor(value));
-    // Idle: nothing reconnects — the name just rides the next connect.
-    if (p.state !== 'idle') armWatchdog();
     return;
   }
   if (pending) {
