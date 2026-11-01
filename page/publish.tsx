@@ -605,9 +605,12 @@ playbackToggleBtn.addEventListener('click', () => {
 
 // ─── Init ─────────────────────────────────────────────────────────
 
-// Persistent stream key: load from localStorage or generate a random 8-char one.
+// Persistent stream key: load from localStorage or generate a random 8-char
+// one. ?stream= overrides both, so a QR link like
+// publish.html?stream=live-9e27&token=abc&latency=500 pre-fills everything.
+const pageQuery = new URLSearchParams(location.search);
 const STREAM_KEY_KEY = 'quicsrt-stream-name';
-const savedName = localStorage.getItem(STREAM_KEY_KEY);
+const savedName = pageQuery.get('stream') || localStorage.getItem(STREAM_KEY_KEY);
 streamNameInput.value = savedName ?? Array.from(
   { length: 8 },
   () => Math.floor(Math.random() * 36).toString(36),
@@ -616,6 +619,10 @@ localStorage.setItem(STREAM_KEY_KEY, streamNameInput.value);
 streamNameInput.addEventListener('change', () => {
   localStorage.setItem(STREAM_KEY_KEY, streamNameInput.value);
 });
+
+// ?latency= (ms) pre-fills the publish latency input (HTML default: 120).
+const qsLatency = +(pageQuery.get('latency') ?? '');
+if (qsLatency > 0) latencyNum.value = String(qsLatency);
 
 populateCodecSelect();
 if (canvasMode) {
