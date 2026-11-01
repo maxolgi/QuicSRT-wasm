@@ -6,7 +6,8 @@
 // (page/bundle/worker.js, which runs the engine via js/srt_engine.js).
 
 import { mountPlayer } from './vendor/player/index';
-import type { PlayerState } from './vendor/player/index';
+import type { PlayerState, PlayerStatsDetail } from './vendor/player/index';
+import { createAbr } from './vendor/abr';
 
 const canvas = document.getElementById('video-canvas') as HTMLCanvasElement;
 const connectBtn = document.getElementById('connect') as HTMLButtonElement;
@@ -87,21 +88,27 @@ document.addEventListener('visibilitychange', () => {
   handle.getWorker()?.postMessage({ cmd: 'visibility', visible: !document.hidden });
 });
 
-// --- Quality selector (manual ABR rung switch) ---
+// --- Quality selector (manual + auto ABR rung switching) ---
 // ?rungs= is the comma-separated rendition-suffix ladder the gateway
 // transcoder publishes as ${base}_${suffix} (the source itself is ${base});
 // default matches its 288p,216p. ?rungs=none (or empty) hides the control.
 // setStream records the name for the next connect and reconnects immediately
-// when active; a 10 s watchdog reverts to the last 'playing'-confirmed
-// selection and disables a rung that never came up.
+// when active; a watchdog reverts to the last 'playing'-confirmed selection
+// and disables a rung that never came up — 10 s, or 12 s when the target is
+// the source rung (its ~8.3 s GOP legitimately delays the first frame).
+// The default 'auto' option drives the same switch machinery from the
+// vendored ABR engine: one rung per decision, fed ~1 Hz from 'stats'.
 const rungsParam = new URLSearchParams(location.search).get('rungs') ?? '288p,216p';
 const baseStream = new URLSearchParams(location.search).get('stream') ?? 'default';
 const qualitySel = document.getElementById('quality') as HTMLSelectElement;
+// Ladder top-down = option order after 'auto': the source ('') then the
+// rendition suffixes; stepRung walks it by index.
+const ladder = [''].concat(rungsParam.split(',').map(s => s.trim()).filter(Boolean));
 
 if (rungsParam === 'none' || rungsParam === '') {
   qualitySel.closest('label')?.remove();
 } else {
-  for (const suffix of rungsParam.split(',').map(s => s.trim()).filter(Boolean)) {
+  for (const suffix of ladder.slice(1)) {
     const opt = document.createElement('option');
     opt.value = suffix;
     opt.textContent = suffix;
@@ -117,6 +124,14 @@ function streamFor(value: string) {
 let prevValue = '';
 let prevTarget = baseStream;
 let watchdog = 0;
+// Auto mode: 'auto' is the default selection; any user-picked rung parks
+// the engine until 'auto' is re-selected. `rung` tracks the live rung even
+// while the select shows 'auto'; `autoSwitch` marks an engine-initiated
+// switch awaiting its 'playing' confirmation.
+const engine = createAbr();
+let autoMode = true;
+let rung = '';
+let autoSwitch = false;
 
 function armWatchdog() {
   clearTimeout(watchdog);
@@ -124,26 +139,79 @@ function armWatchdog() {
     watchdog = 0;
     // 'playing' fires once per connection, so a fire with nothing newer
     // confirmed is steady playback — only an unconfirmed switch reverts.
-    if (qualitySel.value === prevValue) return;
+    // While the select shows 'auto', the live rung is `rung`.
+    if ((qualitySel.value === 'auto' ? rung : qualitySel.value) === prevValue) return;
     const failed = qualitySel.selectedOptions[0];
     failed.disabled = true;
     qualitySel.value = prevValue;
+    rung = prevValue;
     handle.setStream(prevTarget);
-  }, 10000);
+    // In auto mode the revert is engine bookkeeping, not a mode change:
+    // the reverted-to stream is what was playing, so just show 'auto'
+    // again — no switch follows.
+    if (autoMode) qualitySel.value = 'auto';
+  }, qualitySel.value === '' ? 12000 : 10000);
 }
 
-qualitySel.addEventListener('change', () => {
-  handle.setStream(streamFor(qualitySel.value));
+qualitySel.addEventListener('change', (e) => {
+  // User picks rule the mode: 'auto' engages the engine, any rung parks
+  // it. Engine switches dispatch untrusted 'change' events and the
+  // watchdog revert writes .value directly (no event) — neither flips it.
+  if (e.isTrusted) {
+    autoMode = qualitySel.value === 'auto';
+    if (autoMode) engine.reset();
+  }
+  if (qualitySel.value === 'auto') {
+    // Engaging auto keeps the current stream and rung; nothing is in
+    // flight, so disarm instead of watching a no-switch.
+    clearTimeout(watchdog);
+    watchdog = 0;
+    return;
+  }
+  rung = qualitySel.value;
+  handle.setStream(streamFor(rung));
   // Idle: nothing reconnects — the name just rides the next connect.
   if (handle.state !== 'idle') armWatchdog();
 });
 
 handle.addEventListener('playing', () => {
   // Stream confirmed (initial connect or switch): roll the watchdog window
-  // and commit the current selection as the new fallback.
-  prevValue = qualitySel.value;
+  // and commit the current selection as the new fallback. While the select
+  // shows 'auto', the confirmed rung is `rung`.
+  prevValue = qualitySel.value === 'auto' ? rung : qualitySel.value;
   prevTarget = streamFor(prevValue);
+  if (autoSwitch) {
+    // Engine-initiated switch confirmed: restart its decision window.
+    engine.reset();
+    autoSwitch = false;
+  }
   armWatchdog();
+});
+
+// One rung along the ladder (option order: source → 288p → 216p), clamped
+// at both ends. Rides the exact manual-switch path: set the select and
+// dispatch 'change' (untrusted → the mode holds); the watchdog reverts a
+// target that never comes up.
+function stepRung(delta: number) {
+  const next = ladder.indexOf(rung) + delta;
+  if (next < 0 || next >= ladder.length) return;
+  autoSwitch = true;
+  qualitySel.value = ladder[next];
+  qualitySel.dispatchEvent(new Event('change'));
+  // The switch rode the change handler (which armed the watchdog while the
+  // value still named the target rung); re-show 'auto' so the UI keeps
+  // saying the engine owns the ladder. Mode never flipped — untrusted event.
+  qualitySel.value = 'auto';
+}
+
+// Feed the engine the ~1 Hz cumulative counters; a decision moves one rung.
+handle.addEventListener('stats', (ev) => {
+  if (!autoMode) return;
+  const { rxData, rxLoss, rxDropped } =
+    (ev as CustomEvent<PlayerStatsDetail>).detail.stats;
+  const decision = engine.tick({ rxData, rxLoss, rxDropped }, performance.now());
+  if (decision === 'down') stepRung(1);
+  else if (decision === 'up') stepRung(-1);
 });
 
 // --- Player events → UI ---
