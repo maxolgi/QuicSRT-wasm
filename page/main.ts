@@ -124,7 +124,7 @@ const qualitySel = document.getElementById('quality') as HTMLSelectElement;
 const ladder = [''].concat(rungsParam.split(',').map(s => s.trim()).filter(Boolean));
 
 if (rungsParam === 'none' || rungsParam === '') {
-  qualitySel.closest('label')?.remove();
+  document.getElementById('quality-ctl')?.remove();
 } else {
   for (const suffix of ladder.slice(1)) {
     const opt = document.createElement('option');
@@ -133,6 +133,68 @@ if (rungsParam === 'none' || rungsParam === '') {
     qualitySel.appendChild(opt);
   }
 }
+
+// Custom dropdown UI (see index.html): the native select popup would
+// freeze the rAF-driven stage while open, so a plain button + popup
+// render it. The hidden <select> stays the state holder — value,
+// options and disable logic below are unchanged. User picks dispatch
+// the same 'change' event with `userPick` set (the custom-control
+// replacement for a trusted native event); programmatic switches
+// (stepRung, reverts) leave it unset, exactly as untrusted events did.
+const qualityBtn = document.getElementById('quality-btn') as HTMLButtonElement;
+const qualityPop = document.getElementById('quality-pop') as HTMLDivElement;
+
+let userPick = false;
+
+function syncQualityBtn(): void {
+  qualityBtn.textContent = qualitySel.value === '' ? 'source' : qualitySel.value;
+}
+
+function setQualitySel(v: string): void {
+  qualitySel.value = v;
+  syncQualityBtn();
+}
+
+function closeQualityPop(): void {
+  qualityPop.hidden = true;
+  // Drop stale option buttons: a later toggle-close early-returns before
+  // rebuilding, and hidden-but-stale buttons are scriptable.
+  qualityPop.textContent = '';
+}
+
+qualityBtn.addEventListener('click', () => {
+  qualityPop.hidden = !qualityPop.hidden;
+  if (qualityPop.hidden) return;
+  // Rebuilt on every open: option set and disabled flags may have
+  // changed (rungs disabled by the watchdog / overlap abort).
+  qualityPop.textContent = '';
+  for (const opt of qualitySel.options) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = opt.textContent;
+    b.disabled = opt.disabled;
+    b.addEventListener('click', () => {
+      closeQualityPop();
+      if (opt.value === qualitySel.value) return;
+      userPick = true;
+      qualitySel.value = opt.value;
+      qualitySel.dispatchEvent(new Event('change'));
+      userPick = false;
+      syncQualityBtn();
+    });
+    qualityPop.appendChild(b);
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (!qualityPop.hidden && e.target !== qualityBtn && !qualityPop.contains(e.target as Node)) {
+    closeQualityPop();
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeQualityPop();
+});
+syncQualityBtn();
 
 // '' (source) maps to the base stream itself.
 function streamFor(value: string) {
@@ -165,13 +227,13 @@ function armWatchdog() {
     if ((qualitySel.value === 'auto' ? rung : qualitySel.value) === prevValue) return;
     const failed = qualitySel.selectedOptions[0];
     failed.disabled = true;
-    qualitySel.value = prevValue;
+    setQualitySel(prevValue);
     rung = prevValue;
     players[activeIdx].setStream(prevTarget);
     // In auto mode the revert is engine bookkeeping, not a mode change:
     // the reverted-to stream is what was playing, so just show 'auto'
     // again — no switch follows.
-    if (autoMode) qualitySel.value = 'auto';
+    if (autoMode) setQualitySel('auto');
   }, qualitySel.value === '' ? 12000 : 10000);
 }
 
@@ -200,8 +262,11 @@ function switchTo(value: string) {
   watchdog = 0;
   const joiner = players[1 - activeIdx];
   pending = { target: value, t0: performance.now(), timer: window.setTimeout(abortOverlap, 12000) };
-  // The other player is idle whenever no overlap is pending: setStream
-  // records the name and connect() pre-joins it on the hidden canvas.
+  // The joiner should be idle between overlaps, but don't race it if it
+  // isn't: setStream on an active viewer schedules its OWN reconnect, and
+  // the explicit connect() below would double-connect it (two sessions on
+  // one rung). Force idle first, then record + connect, exactly once.
+  joiner.disconnect();
   joiner.setStream(streamFor(value));
   joiner.connect().catch(() => {});
 }
@@ -227,16 +292,16 @@ function abortOverlap() {
   for (const opt of qualitySel.options) {
     if (opt.value === failedRung) opt.disabled = true;
   }
-  qualitySel.value = prevValue;
+  setQualitySel(prevValue);
   rung = prevValue;
-  if (autoMode) qualitySel.value = 'auto';
+  if (autoMode) setQualitySel('auto');
 }
 
-qualitySel.addEventListener('change', (e) => {
+qualitySel.addEventListener('change', () => {
   // User picks rule the mode: 'auto' engages the engine, any rung parks
-  // it. Engine switches dispatch untrusted 'change' events and the
-  // watchdog revert writes .value directly (no event) — neither flips it.
-  if (e.isTrusted) {
+  // it. Engine switches and the reverts below dispatch/ride plain
+  // writes with userPick unset — neither flips it.
+  if (userPick) {
     autoMode = qualitySel.value === 'auto';
     if (autoMode) engine.reset();
   }
@@ -312,12 +377,12 @@ function stepRung(delta: number) {
   const next = ladder.indexOf(rung) + delta;
   if (next < 0 || next >= ladder.length) return;
   autoSwitch = true;
-  qualitySel.value = ladder[next];
+  setQualitySel(ladder[next]);
   qualitySel.dispatchEvent(new Event('change'));
   // The switch rode the change handler (which started it while the value
   // still named the target rung); re-show 'auto' so the UI keeps saying
-  // the engine owns the ladder. Mode never flipped — untrusted event.
-  qualitySel.value = 'auto';
+  // the engine owns the ladder. Mode never flipped — no userPick.
+  setQualitySel('auto');
 }
 
 // Feed the engine the ~1 Hz cumulative counters; a decision moves one
