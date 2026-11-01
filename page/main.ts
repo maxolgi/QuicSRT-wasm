@@ -87,6 +87,65 @@ document.addEventListener('visibilitychange', () => {
   handle.getWorker()?.postMessage({ cmd: 'visibility', visible: !document.hidden });
 });
 
+// --- Quality selector (manual ABR rung switch) ---
+// ?rungs= is the comma-separated rendition-suffix ladder the gateway
+// transcoder publishes as ${base}_${suffix} (the source itself is ${base});
+// default matches its 288p,216p. ?rungs=none (or empty) hides the control.
+// setStream records the name for the next connect and reconnects immediately
+// when active; a 10 s watchdog reverts to the last 'playing'-confirmed
+// selection and disables a rung that never came up.
+const rungsParam = new URLSearchParams(location.search).get('rungs') ?? '288p,216p';
+const baseStream = new URLSearchParams(location.search).get('stream') ?? 'default';
+const qualitySel = document.getElementById('quality') as HTMLSelectElement;
+
+if (rungsParam === 'none' || rungsParam === '') {
+  qualitySel.closest('label')?.remove();
+} else {
+  for (const suffix of rungsParam.split(',').map(s => s.trim()).filter(Boolean)) {
+    const opt = document.createElement('option');
+    opt.value = suffix;
+    opt.textContent = suffix;
+    qualitySel.appendChild(opt);
+  }
+}
+
+// '' (source) maps to the base stream itself.
+function streamFor(value: string) {
+  return value === '' ? baseStream : `${baseStream}_${value}`;
+}
+
+let prevValue = '';
+let prevTarget = baseStream;
+let watchdog = 0;
+
+function armWatchdog() {
+  clearTimeout(watchdog);
+  watchdog = window.setTimeout(() => {
+    watchdog = 0;
+    // 'playing' fires once per connection, so a fire with nothing newer
+    // confirmed is steady playback — only an unconfirmed switch reverts.
+    if (qualitySel.value === prevValue) return;
+    const failed = qualitySel.selectedOptions[0];
+    failed.disabled = true;
+    qualitySel.value = prevValue;
+    handle.setStream(prevTarget);
+  }, 10000);
+}
+
+qualitySel.addEventListener('change', () => {
+  handle.setStream(streamFor(qualitySel.value));
+  // Idle: nothing reconnects — the name just rides the next connect.
+  if (handle.state !== 'idle') armWatchdog();
+});
+
+handle.addEventListener('playing', () => {
+  // Stream confirmed (initial connect or switch): roll the watchdog window
+  // and commit the current selection as the new fallback.
+  prevValue = qualitySel.value;
+  prevTarget = streamFor(prevValue);
+  armWatchdog();
+});
+
 // --- Player events → UI ---
 const buttonLabel: Record<PlayerState, string> = {
   idle: 'connect',

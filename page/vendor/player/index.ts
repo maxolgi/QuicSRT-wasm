@@ -79,6 +79,8 @@ export interface PlayerHandle extends EventTarget {
   setMuted(muted: boolean): void;
   setLatencyMs(ms: number): void;
   readonly latencyMs: number;
+  /** Switch streams. Reconnects if active and the name changed. */
+  setStream(name: string): void;
   setRenderPacing(enabled: boolean): void;
   setDecodePacing(enabled: boolean): void;
   getRenderer(): CanvasRenderer | null;
@@ -288,6 +290,8 @@ class Player extends EventTarget implements PlayerHandle {
   }
 
   setLatencyMs(ms: number): void { this.viewer.setLatencyMs(ms); }
+
+  setStream(name: string): void { this.viewer.setStream(name); }
 
   setRenderPacing(enabled: boolean): void {
     // No-op in decodeInWorker mode (no renderer on main thread).

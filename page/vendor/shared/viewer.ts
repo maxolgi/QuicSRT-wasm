@@ -124,6 +124,9 @@ export interface ViewerHandle {
   setLatencyMs(ms: number): void;
   /** Current TSBPD latency in milliseconds. */
   getLatencyMs(): number;
+  /** Set the stream name. Reconnects if active and the name changed;
+   *  recorded for the next connect() when idle. */
+  setStream(name: string): void;
   /** Mute or unmute audio. Works without any DOM element. */
   setMuted(muted: boolean): void;
   /** Tab visibility changed (drives worker visibility message). */
@@ -199,6 +202,8 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
   let latestDriftMs: number | null = null;
   let currentLatencyMs: number = initialLatencyMs ?? (latencyInput ? (+latencyInput.value || 120) : 120);
   let appliedLatencyMs = currentLatencyMs;
+  let streamOverride: string | null = null;
+  let appliedStream: string | null = null;
   let mutedState = true;
 
   function log(msg: string, cls = '') {
@@ -379,7 +384,8 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     }
 
     const authToken = token ?? new URLSearchParams(location.search).get('token') ?? undefined;
-    const streamName = getStreamName?.() ?? stream ?? new URLSearchParams(location.search).get('stream') ?? 'default';
+    const streamName = streamOverride ?? getStreamName?.() ?? stream ?? new URLSearchParams(location.search).get('stream') ?? 'default';
+    appliedStream = streamName;
     let wtUrl: string;
     if (configUrl) {
       const parsed = new URL(configUrl);
@@ -582,6 +588,14 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     }
   }
 
+  function setStream(name: string) {
+    streamOverride = name;
+    if (connState !== 'idle' && name !== appliedStream) {
+      doDisconnect();
+      setTimeout(() => doConnect(), 100);
+    }
+  }
+
   function setMuted(muted: boolean) {
     mutedState = muted;
     if (audioEl) {
@@ -597,6 +611,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     disconnect: doDisconnect,
     setLatencyMs,
     getLatencyMs: () => currentLatencyMs,
+    setStream,
     setMuted,
     onVisibilityChange(visible: boolean) {
       worker?.postMessage({ cmd: 'visibility', visible });
