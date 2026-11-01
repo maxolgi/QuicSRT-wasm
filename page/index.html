@@ -31,7 +31,17 @@
         width: auto;
         height: auto;
       }
-      #video-canvas:fullscreen {
+      /* Hidden overlap stage: shown (inline display: block) when an overlap
+         swap makes it the active canvas; the old one is hidden the same way. */
+      #video-canvas-b {
+        display: none;
+        max-width: 100%;
+        max-height: calc(100vh - 100px);
+        width: auto;
+        height: auto;
+      }
+      #video-canvas:fullscreen,
+      #video-canvas-b:fullscreen {
         width: 100vw; height: 100vh; object-fit: contain; background: #000;
       }
       .ok { color: #6f6; }
@@ -175,6 +185,7 @@
   <body>
     <div>
       <canvas id="video-canvas" width="640" height="360"></canvas>
+      <canvas id="video-canvas-b" width="640" height="360"></canvas>
       <div class="controls">
         <button id="connect">connect</button>
         <label>latency: <input type="number" id="latency-num" min="20" max="8000" step="10" value="120" />ms</label>

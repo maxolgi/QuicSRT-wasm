@@ -10,6 +10,7 @@ import type { PlayerState, PlayerStatsDetail } from './vendor/player/index';
 import { createAbr } from './vendor/abr';
 
 const canvas = document.getElementById('video-canvas') as HTMLCanvasElement;
+const canvasB = document.getElementById('video-canvas-b') as HTMLCanvasElement;
 const connectBtn = document.getElementById('connect') as HTMLButtonElement;
 const latencyNum = document.getElementById('latency-num') as HTMLInputElement;
 const muteBtn = document.getElementById('mute') as HTMLButtonElement;
@@ -41,7 +42,11 @@ const savedDecodePacing = localStorage.getItem('quicsrt-pacing-decode') === '1';
 const savedLatency = localStorage.getItem('latency');
 if (savedLatency) latencyNum.value = savedLatency;
 
-const handle = mountPlayer(canvas, {
+// Two players, one config: A owns the visible stage, B is the hidden
+// overlap target — mounted idle it costs nothing (the viewer creates its
+// worker only on connect), so a rendition switch can pre-join B while A
+// keeps playing and swap the canvases in on B's first rendered frame.
+const mountOpts = {
   latencyMs: +latencyNum.value || 120,
   renderPacing: savedRenderPacing,
   decodePacing: savedDecodePacing,
@@ -55,14 +60,21 @@ const handle = mountPlayer(canvas, {
       decodeParam === 'software' ? 'prefer-software' as const :
       decodeParam === 'hardware' ? 'prefer-hardware' as const : undefined,
   } : {}),
-});
+};
+const players = [mountPlayer(canvas, mountOpts), mountPlayer(canvasB, mountOpts)];
+const canvases = [canvas, canvasB];
+// The active player owns the visible canvas; an overlap swap flips this.
+let activeIdx = 0;
 
 // --- Controls ---
 connectBtn.addEventListener('click', () => {
-  if (handle.state === 'idle' || handle.state === 'error') {
-    handle.connect().catch(() => {});
+  const p = players[activeIdx];
+  if (p.state === 'idle' || p.state === 'error') {
+    p.connect().catch(() => {});
   } else {
-    handle.disconnect();
+    // Manual stop drops any pre-joined overlap target with it.
+    cancelOverlap();
+    p.disconnect();
   }
 });
 
@@ -71,21 +83,23 @@ latencyNum.addEventListener('change', () => {
   latencyNum.value = String(v);
   localStorage.setItem('latency', String(v));
   // setLatencyMs reconnects when active and the value changed (viewer-internal).
-  handle.setLatencyMs(v);
+  // Both handles, so a pre-joined B never carries a stale latency into a swap.
+  for (const p of players) p.setLatencyMs(v);
 });
 
 muteBtn.addEventListener('click', () => {
-  handle.setMuted(!handle.muted);
-  muteBtn.classList.toggle('muted', handle.muted);
+  const p = players[activeIdx];
+  p.setMuted(!p.muted);
+  muteBtn.classList.toggle('muted', p.muted);
 });
 
 fullscreenBtn.addEventListener('click', () => {
   if (document.fullscreenElement) document.exitFullscreen();
-  else canvas.requestFullscreen();
+  else canvases[activeIdx].requestFullscreen();
 });
 
 document.addEventListener('visibilitychange', () => {
-  handle.getWorker()?.postMessage({ cmd: 'visibility', visible: !document.hidden });
+  players[activeIdx].getWorker()?.postMessage({ cmd: 'visibility', visible: !document.hidden });
 });
 
 // --- Quality selector (manual + auto ABR rung switching) ---
@@ -96,6 +110,9 @@ document.addEventListener('visibilitychange', () => {
 // when active; a watchdog reverts to the last 'playing'-confirmed selection
 // and disables a rung that never came up — 10 s, or 12 s when the target is
 // the source rung (its ~8.3 s GOP legitimately delays the first frame).
+// Rendition targets on an active player instead switch by overlap: a hidden
+// second player pre-joins and swaps in on its first rendered frame (no
+// freeze); see switchTo below.
 // The default 'auto' option drives the same switch machinery from the
 // vendored ABR engine: one rung per decision, fed ~1 Hz from 'stats'.
 const rungsParam = new URLSearchParams(location.search).get('rungs') ?? '288p,216p';
@@ -132,6 +149,10 @@ const engine = createAbr();
 let autoMode = true;
 let rung = '';
 let autoSwitch = false;
+// Pending overlap switch: the hidden player is pre-joining `target`; its
+// 'playing' completes the swap, the 12 s timer aborts a join that never
+// rendered (a source-GOP-length join still fits the window).
+let pending: { target: string; t0: number; timer: number } | null = null;
 
 function armWatchdog() {
   clearTimeout(watchdog);
@@ -145,12 +166,69 @@ function armWatchdog() {
     failed.disabled = true;
     qualitySel.value = prevValue;
     rung = prevValue;
-    handle.setStream(prevTarget);
+    players[activeIdx].setStream(prevTarget);
     // In auto mode the revert is engine bookkeeping, not a mode change:
     // the reverted-to stream is what was playing, so just show 'auto'
     // again — no switch follows.
     if (autoMode) qualitySel.value = 'auto';
   }, qualitySel.value === '' ? 12000 : 10000);
+}
+
+// The switch funnel shared by manual picks and stepRung. Source rung or
+// an idle active player: serial — setStream reconnects the active player
+// itself, the watchdog reverts a target that never comes up. Rendition
+// target on an active player: overlap — the hidden player pre-joins
+// while the active one keeps playing, so the visible stage never freezes.
+function switchTo(value: string) {
+  const p = players[activeIdx];
+  if (value === '' || p.state === 'idle') {
+    // A serial target supersedes a pending overlap: drop the pre-join.
+    cancelOverlap();
+    p.setStream(streamFor(value));
+    // Idle: nothing reconnects — the name just rides the next connect.
+    if (p.state !== 'idle') armWatchdog();
+    return;
+  }
+  if (pending) {
+    console.warn('abr: overlap already pending — ignoring switch to %s', value);
+    return;
+  }
+  // The overlap owns switch confirmation from here; the serial watchdog
+  // would revert the select mid-join, so disarm it for the window.
+  clearTimeout(watchdog);
+  watchdog = 0;
+  const joiner = players[1 - activeIdx];
+  pending = { target: value, t0: performance.now(), timer: window.setTimeout(abortOverlap, 12000) };
+  // The other player is idle whenever no overlap is pending: setStream
+  // records the name and connect() pre-joins it on the hidden canvas.
+  joiner.setStream(streamFor(value));
+  joiner.connect().catch(() => {});
+}
+
+// Drop a pending pre-join without touching the select (a superseding
+// serial switch or a manual stop): frees the hidden player's worker.
+function cancelOverlap() {
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pending = null;
+  players[1 - activeIdx].disconnect();
+}
+
+// 12 s with no rendered frame from the pre-join: keep the old player
+// (it never stopped playing) and mirror the watchdog revert — disable
+// the rung that never came up, restore the last confirmed selection.
+// No setStream: the old player is already on prevTarget.
+function abortOverlap() {
+  if (!pending) return;
+  const failedRung = pending.target;
+  pending = null;
+  players[1 - activeIdx].disconnect();
+  for (const opt of qualitySel.options) {
+    if (opt.value === failedRung) opt.disabled = true;
+  }
+  qualitySel.value = prevValue;
+  rung = prevValue;
+  if (autoMode) qualitySel.value = 'auto';
 }
 
 qualitySel.addEventListener('change', (e) => {
@@ -169,15 +247,14 @@ qualitySel.addEventListener('change', (e) => {
     return;
   }
   rung = qualitySel.value;
-  handle.setStream(streamFor(rung));
-  // Idle: nothing reconnects — the name just rides the next connect.
-  if (handle.state !== 'idle') armWatchdog();
+  switchTo(rung);
 });
 
-handle.addEventListener('playing', () => {
-  // Stream confirmed (initial connect or switch): roll the watchdog window
-  // and commit the current selection as the new fallback. While the select
-  // shows 'auto', the confirmed rung is `rung`.
+// 'playing' confirmation shared by every path — initial connect, serial
+// switch, overlap swap (the hook below calls it after the canvas swap):
+// roll the watchdog window and commit the current selection as the new
+// fallback. While the select shows 'auto', the confirmed rung is `rung`.
+function commitPlaying() {
   prevValue = qualitySel.value === 'auto' ? rung : qualitySel.value;
   prevTarget = streamFor(prevValue);
   if (autoSwitch) {
@@ -186,33 +263,76 @@ handle.addEventListener('playing', () => {
     autoSwitch = false;
   }
   armWatchdog();
-});
+}
+
+// Attached to BOTH players, gated to the active one: while an overlap is
+// pending the pre-join owns confirmation, so even the active player's own
+// reconnect-'playing' must not commit the unconfirmed selection.
+for (const p of players) {
+  p.addEventListener('playing', () => {
+    if (p !== players[activeIdx] || pending) return;
+    commitPlaying();
+  });
+}
+
+// Overlap hook: a 'playing' from the NON-active player completes the
+// pre-join — swap the canvases (no freeze: the joiner is already
+// rendering), disconnect the old player to free its worker, carry the
+// mute state across, then confirm through the same commit path as a
+// serial switch. A stray non-active 'playing' with nothing pending is
+// ignored.
+for (const p of players) {
+  p.addEventListener('playing', () => {
+    if (p === players[activeIdx] || !pending) return;
+    const from = prevValue;
+    const to = pending.target;
+    const ms = Math.round(performance.now() - pending.t0);
+    clearTimeout(pending.timer);
+    pending = null;
+    // Flip the stage and the index BEFORE the old player's disconnect —
+    // its synchronous 'statechange'→'idle' must land as a non-active
+    // event, or it would reset the connect button mid-swap.
+    const old = players[activeIdx];
+    canvases[activeIdx].style.display = 'none';
+    activeIdx = 1 - activeIdx;
+    canvases[activeIdx].style.display = 'block';
+    old.disconnect();
+    p.setMuted(old.muted);
+    console.info('abr: overlap swap %s -> %s (join %dms)', from, to, ms);
+    commitPlaying();
+  });
+}
 
 // One rung along the ladder (option order: source → 288p → 216p), clamped
 // at both ends. Rides the exact manual-switch path: set the select and
-// dispatch 'change' (untrusted → the mode holds); the watchdog reverts a
-// target that never comes up.
+// dispatch 'change' (untrusted → the mode holds); a target that never
+// comes up reverts (overlap abort, or the watchdog on the serial path).
 function stepRung(delta: number) {
   const next = ladder.indexOf(rung) + delta;
   if (next < 0 || next >= ladder.length) return;
   autoSwitch = true;
   qualitySel.value = ladder[next];
   qualitySel.dispatchEvent(new Event('change'));
-  // The switch rode the change handler (which armed the watchdog while the
-  // value still named the target rung); re-show 'auto' so the UI keeps
-  // saying the engine owns the ladder. Mode never flipped — untrusted event.
+  // The switch rode the change handler (which started it while the value
+  // still named the target rung); re-show 'auto' so the UI keeps saying
+  // the engine owns the ladder. Mode never flipped — untrusted event.
   qualitySel.value = 'auto';
 }
 
-// Feed the engine the ~1 Hz cumulative counters; a decision moves one rung.
-handle.addEventListener('stats', (ev) => {
-  if (!autoMode) return;
-  const { rxData, rxLoss, rxDropped } =
-    (ev as CustomEvent<PlayerStatsDetail>).detail.stats;
-  const decision = engine.tick({ rxData, rxLoss, rxDropped }, performance.now());
-  if (decision === 'down') stepRung(1);
-  else if (decision === 'up') stepRung(-1);
-});
+// Feed the engine the ~1 Hz cumulative counters; a decision moves one
+// rung. Active player only, and none while an overlap is pending — one
+// pre-join at a time (the engine re-baselines on the post-pause tick
+// gap, and the swap's commitPlaying resets it on engine-led switches).
+for (const p of players) {
+  p.addEventListener('stats', (ev) => {
+    if (p !== players[activeIdx] || !autoMode || pending) return;
+    const { rxData, rxLoss, rxDropped } =
+      (ev as CustomEvent<PlayerStatsDetail>).detail.stats;
+    const decision = engine.tick({ rxData, rxLoss, rxDropped }, performance.now());
+    if (decision === 'down') stepRung(1);
+    else if (decision === 'up') stepRung(-1);
+  });
+}
 
 // --- Player events → UI ---
 const buttonLabel: Record<PlayerState, string> = {
@@ -223,24 +343,31 @@ const buttonLabel: Record<PlayerState, string> = {
   error: 'connect',
 };
 
-handle.addEventListener('statechange', (ev) => {
-  const s = (ev as CustomEvent<PlayerState>).detail;
-  connectBtn.textContent = buttonLabel[s];
-  if (s === 'idle') {
-    muteBtn.disabled = true;
-    muteBtn.classList.add('muted');
-  }
-});
+// Both handles feed the UI; only the active player's events count (the
+// pre-join's 'open'/'stats'/… are overlap plumbing, not UI state).
+for (const p of players) {
+  p.addEventListener('statechange', (ev) => {
+    if (p !== players[activeIdx]) return;
+    const s = (ev as CustomEvent<PlayerState>).detail;
+    connectBtn.textContent = buttonLabel[s];
+    if (s === 'idle') {
+      muteBtn.disabled = true;
+      muteBtn.classList.add('muted');
+    }
+  });
 
-handle.addEventListener('open', () => {
-  muteBtn.disabled = false;
-  muteBtn.classList.toggle('muted', handle.muted);
-});
+  p.addEventListener('open', () => {
+    if (p !== players[activeIdx]) return;
+    muteBtn.disabled = false;
+    muteBtn.classList.toggle('muted', p.muted);
+  });
 
-handle.addEventListener('playing', () => {
-  muteBtn.disabled = false;
-  muteBtn.classList.toggle('muted', handle.muted);
-});
+  p.addEventListener('playing', () => {
+    if (p !== players[activeIdx]) return;
+    muteBtn.disabled = false;
+    muteBtn.classList.toggle('muted', p.muted);
+  });
+}
 
 // --- Debug panel resize handle (sits on the panel's left edge) ---
 const PANEL_MIN_W = 320;
@@ -303,7 +430,9 @@ async function setPanelVisible(visible: boolean): Promise<void> {
     try {
       const { mountDebug } = await import('./vendor/debug');
       // Panel may have been closed while the chunk was loading.
-      if (debugRoot.classList.contains('visible')) debugHandle = mountDebug(handle, debugRoot);
+      // v1 limitation: the panel binds the FIRST player — after an
+      // overlap swap it keeps showing that (now disconnected) player.
+      if (debugRoot.classList.contains('visible')) debugHandle = mountDebug(players[0], debugRoot);
     } finally {
       debugMounting = false;
     }
@@ -328,5 +457,5 @@ if (localStorage.getItem('quicsrt-debug-open') === '1') {
 
 // --- Auto-connect once the gateway has published a cert hash ---
 if ((window as any).CERT_HASH !== undefined) {
-  handle.connect().catch(() => {});
+  players[activeIdx].connect().catch(() => {});
 }
