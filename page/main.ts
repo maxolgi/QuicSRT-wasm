@@ -85,6 +85,13 @@ latencyNum.addEventListener('change', () => {
   // setLatencyMs reconnects when active and the value changed (viewer-internal).
   // Both handles, so a pre-joined B never carries a stale latency into a swap.
   for (const p of players) p.setLatencyMs(v);
+  // That reconnect restarted the joiner on the OLD abort clock — redo the
+  // pending overlap so it rejoins at the new latency, window fresh.
+  if (pending) {
+    const t = pending.target;
+    cancelOverlap();
+    switchTo(t);
+  }
 });
 
 muteBtn.addEventListener('click', () => {
@@ -95,11 +102,14 @@ muteBtn.addEventListener('click', () => {
 
 fullscreenBtn.addEventListener('click', () => {
   if (document.fullscreenElement) document.exitFullscreen();
-  else canvases[activeIdx].requestFullscreen();
+  // Fullscreen the stage, not the canvas: a swap display:nones the
+  // fullscreened canvas, which drops out of fullscreen.
+  else document.getElementById('video-stage')!.requestFullscreen();
 });
 
 document.addEventListener('visibilitychange', () => {
-  players[activeIdx].getWorker()?.postMessage({ cmd: 'visibility', visible: !document.hidden });
+  // Both handles — a pre-join's worker would otherwise miss the hint.
+  for (const p of players) p.getWorker()?.postMessage({ cmd: 'visibility', visible: !document.hidden });
 });
 
 // --- Quality selector (manual + auto ABR rung switching) ---
@@ -253,8 +263,11 @@ function switchTo(value: string) {
     return;
   }
   if (pending) {
-    console.warn('abr: overlap already pending — ignoring switch to %s', value);
-    return;
+    // A re-pick of the in-flight target is a no-op; any other pick
+    // supersedes the pre-join — drop it and start a fresh overlap (the
+    // 12 s abort bounds the thrash).
+    if (pending.target === value) return;
+    cancelOverlap();
   }
   // The overlap owns switch confirmation from here; the serial watchdog
   // would revert the select mid-join, so disarm it for the window.
@@ -303,7 +316,11 @@ qualitySel.addEventListener('change', () => {
   // writes with userPick unset — neither flips it.
   if (userPick) {
     autoMode = qualitySel.value === 'auto';
-    if (autoMode) engine.reset();
+    if (autoMode) {
+      engine.reset();
+      // Engaging auto is an explicit retry — re-enable benched rungs.
+      for (const o of qualitySel.options) o.disabled = false;
+    }
   }
   if (qualitySel.value === 'auto') {
     // Engaging auto keeps the current stream and rung; nothing is in
@@ -366,6 +383,13 @@ for (const p of players) {
     p.setMuted(old.muted);
     console.info('abr: overlap swap %s -> %s (join %dms)', from, to, ms);
     commitPlaying();
+    // The debug panel re-mounts per active player (chart history resets
+    // on a rung swap — new session, new stats).
+    if (debugRoot.classList.contains('visible')) {
+      debugHandle?.destroy();
+      debugHandle = null;
+      void mountDebugPanel();
+    }
   });
 }
 
@@ -484,6 +508,21 @@ function syncResizerPosition() {
 let debugHandle: { destroy(): void } | null = null;
 let debugMounting = false;
 
+// Mount the panel bound to the CURRENT active player — the handle is
+// read AFTER the chunk resolves, so a swap during the import binds the
+// post-swap player, and the mounting guard collapses concurrent mounts.
+async function mountDebugPanel(): Promise<void> {
+  if (debugHandle || debugMounting) return;
+  debugMounting = true;
+  try {
+    const { mountDebug } = await import('./vendor/debug');
+    // Panel may have been closed while the chunk was loading.
+    if (debugRoot.classList.contains('visible')) debugHandle = mountDebug(players[activeIdx], debugRoot);
+  } finally {
+    debugMounting = false;
+  }
+}
+
 async function setPanelVisible(visible: boolean): Promise<void> {
   if (visible) {
     debugRoot.classList.add('visible');
@@ -491,17 +530,7 @@ async function setPanelVisible(visible: boolean): Promise<void> {
     resizer.classList.add('visible');
     localStorage.setItem('quicsrt-debug-open', '1');
     syncResizerPosition();
-    if (debugHandle || debugMounting) return;
-    debugMounting = true;
-    try {
-      const { mountDebug } = await import('./vendor/debug');
-      // Panel may have been closed while the chunk was loading.
-      // v1 limitation: the panel binds the FIRST player — after an
-      // overlap swap it keeps showing that (now disconnected) player.
-      if (debugRoot.classList.contains('visible')) debugHandle = mountDebug(players[0], debugRoot);
-    } finally {
-      debugMounting = false;
-    }
+    await mountDebugPanel();
     return;
   }
   debugRoot.classList.remove('visible');

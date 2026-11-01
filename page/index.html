@@ -45,10 +45,9 @@
       /* Hidden overlap stage: shown (inline display: block) when an overlap
          swap makes it the active canvas; the old one is hidden the same way. */
       #video-canvas-b { display: none; }
-      #video-canvas:fullscreen,
-      #video-canvas-b:fullscreen {
-        width: 100vw; height: 100vh; object-fit: contain; background: #000;
-      }
+      /* Fullscreen targets the stage (see main.ts): a canvas swap inside
+         it never display:nones the fullscreen element. */
+      #video-stage:fullscreen { width: 100vw; height: 100vh; background: #000; }
       .ok { color: #6f6; }
       .err { color: #f66; }
       .info { color: #6cf; }
