@@ -135,6 +135,16 @@ extern "C" {
 // (The publisher struct must be complete here: srtw_engine_free, defined
 // below, tears it down. Its functions stay in the test-only section.)
 
+// C ABI over the fork's srttransport helper (js/vt_queue.cpp): the seam
+// config for srt_bind_virtual plus the thread-safe push-queue injection
+// that the pre-rework fork carried inside libsrt as
+// srt_virtual_transport_inject.
+void* vt_queue_new(int (*send_fn)(void*, const char*, int, const struct sockaddr*, int), void* opaq);
+SRT_VirtualTransportConfig vt_queue_config(void* q, int initial_rtt_ms);
+int   vt_queue_push(void* q, const void* data, size_t len, const struct sockaddr* src, socklen_t srclen);
+void  vt_queue_detach(void* q);
+void  vt_queue_free(void* q);
+
 typedef struct srtw_engine srtw_engine;
 
 #define TST_PAYLOAD_SIZE 1128 // 6 x 188-byte TS packets - the quicsrt:// protocol constant
@@ -148,7 +158,7 @@ typedef struct
 {
     srtw_engine*         engine; // for the teardown order
     SRTSOCKET            sock;
-    SRTVirtualTransport* vt;
+    void*                vtq; // the srttransport push queue (js/vt_queue.cpp)
     srtw_ring            out; // publisher seam output, drained by JS
     pthread_t            thread;
     int                  thread_started;
@@ -258,9 +268,10 @@ void srtw_engine_free(void* h)
         }
         srtw_receiver_free(e->receiver);
         e->receiver = NULL;
-        if (p->vt != NULL)
+        if (p->vtq != NULL)
         {
-            srt_virtual_transport_release(p->vt);
+            vt_queue_detach(p->vtq);
+            vt_queue_free(p->vtq);
         }
         ring_destroy(&p->out);
         free(p);
@@ -289,6 +300,20 @@ static struct sockaddr_in listener_label(void)
     sa.sin_family      = AF_INET;
     sa.sin_port        = htons(0);
     sa.sin_addr.s_addr = inet_addr("10.213.255.254");
+    return sa;
+}
+
+// The publisher's own srt_bind_virtual label: any address works (it is
+// only what srt_getsockname reports - dispatch never looks at it, every
+// bound socket owns a dedicated muxer), so pick a sibling of the
+// listener's synthetic one.
+static struct sockaddr_in caller_label(void)
+{
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sin_family      = AF_INET;
+    sa.sin_port        = htons(0);
+    sa.sin_addr.s_addr = inet_addr("10.213.255.253");
     return sa;
 }
 
@@ -367,13 +392,12 @@ int srtw_test_publisher_start(void* h)
     }
     p->engine         = e;
     p->sock           = SRT_INVALID_SOCK;
-    p->vt             = NULL;
+    p->vtq            = NULL;
     p->thread_started = 0;
     ring_init(&p->out);
 
     p->sock = srt_create_socket();
     int ok  = p->sock != SRT_INVALID_SOCK;
-    ok      = ok && set_opt_int(p->sock, SRTO_SKIP_INDUCTION, 1);
     ok      = ok && set_opt_int(p->sock, SRTO_PAYLOADSIZE, TST_PAYLOAD_SIZE);
     ok      = ok && set_opt_int(p->sock, SRTO_LATENCY, TST_LATENCY_MS);
     ok      = ok && set_opt_int(p->sock, SRTO_SNDTIMEO, TST_TIMEOUT_MS);
@@ -381,14 +405,28 @@ int srtw_test_publisher_start(void* h)
     ok      = ok && set_opt_int(p->sock, SRTO_SNDBUF, TST_SNDBUF_BYTES);
     if (ok)
     {
-        p->vt = srt_attach_virtual_transport(p->sock, publisher_send, p);
-        ok    = p->vt != NULL;
+        // The push queue gathers the seam's scattered send buffers into
+        // one block and hands it to publisher_send; the stock handshake
+        // form it keeps (conclusion-first is a fork-internal setting now)
+        // interoperates with the receiver's conclusion-first listener.
+        p->vtq = vt_queue_new(publisher_send, p);
+        ok     = p->vtq != NULL;
+    }
+    if (ok)
+    {
+        const struct sockaddr_in     own = caller_label();
+        SRT_VirtualTransportConfig cfg  = vt_queue_config(p->vtq, 0);
+        ok = srt_bind_virtual(p->sock, (const struct sockaddr*)&own, (int)sizeof own, &cfg) != SRT_ERROR;
     }
     if (!ok)
     {
         if (p->sock != SRT_INVALID_SOCK)
         {
             srt_close(p->sock);
+        }
+        if (p->vtq != NULL)
+        {
+            vt_queue_free(p->vtq);
         }
         ring_destroy(&p->out);
         free(p);
@@ -398,7 +436,7 @@ int srtw_test_publisher_start(void* h)
     if (pthread_create(&p->thread, NULL, publisher_thread, p) != 0)
     {
         srt_close(p->sock);
-        srt_virtual_transport_release(p->vt);
+        vt_queue_free(p->vtq);
         ring_destroy(&p->out);
         free(p);
         return -1;
@@ -418,11 +456,11 @@ int srtw_test_publisher_inject(void* h, const uint8_t* data, int len)
     }
     srtw_publisher*          p     = ((srtw_engine*)h)->pub;
     const struct sockaddr_in label = listener_label();
-    return srt_virtual_transport_inject(p->vt,
-                                        (const char*)data,
-                                        len,
-                                        (const struct sockaddr*)&label,
-                                        (int)sizeof label) == 0
+    return vt_queue_push(p->vtq,
+                         data,
+                         (size_t)len,
+                         (const struct sockaddr*)&label,
+                         (socklen_t)sizeof label) == 0
                ? 0
                : -1;
 }

@@ -27,11 +27,13 @@ EOF
 # libquicsrt's Emscripten flavor: the WT-free ReceiverCore (compiled by the
 # libquicsrt configure as a static lib) over the srt fork. Paths and lib
 # artifacts shared by the link steps below.
-SRT_INC="-Ideps/libquicsrt/deps/srt/srtcore -Ideps/libquicsrt/deps/srt/common -Ibuild/libquicsrt/deps/srt"
+SRT_INC="-Ideps/libquicsrt/deps/srt/srtcore -Ideps/libquicsrt/deps/srt/common -Ideps/libquicsrt/deps/srt/logging -Ideps/libquicsrt/deps/srt/srttransport -Ibuild/libquicsrt/deps/srt"
 LW_INC="-Ideps/libquicsrt/src"
 LW_LIB="build/libquicsrt/libquicsrt_receiver_core.a"
 # the srt submodule's own CMake puts its archive at the configure root
 SRT_LIB="build/libquicsrt/libsrt.a"
+# the fork's srttransport push-queue helper (receiver-core now uses it)
+SRTT_LIB="build/libquicsrt/libsrttransport.a"
 
 case "${1:-}" in
     setup)
@@ -67,7 +69,7 @@ case "${1:-}" in
         # -ffp-contract=off: no FMA contraction in the meter's f64 chains
         # (rms/phase are exact-bit given mirrored order; there is no
         # -ffast-math anywhere).
-        em++ harness/receiver.cpp harness/stats_map.cpp harness/ts_demux.cpp harness/nal.cpp harness/aes3.cpp harness/meter.cpp harness/ts_muxer.cpp js/engine_shim.c "$LW_LIB" "$SRT_LIB" \
+        em++ harness/receiver.cpp harness/stats_map.cpp harness/ts_demux.cpp harness/nal.cpp harness/aes3.cpp harness/meter.cpp harness/ts_muxer.cpp js/engine_shim.c js/vt_queue.cpp "$LW_LIB" "$SRT_LIB" "$SRTT_LIB" \
             -o build/srt_engine.mjs \
             -fexceptions -ffp-contract=off -pthread -sUSE_PTHREADS=1 -sALLOW_MEMORY_GROWTH=1 -Os \
             -sMODULARIZE=1 -sEXPORT_NAME=createSrtEngineModule -sEXPORT_ES6=1 \
