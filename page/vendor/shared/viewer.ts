@@ -83,8 +83,10 @@ export interface ViewerConfig {
   decodeInWorker?: boolean;
   /** VideoDecoder hardwareAcceleration preference forwarded to the worker's
    *  pipeline (decodeInWorker mode only; main-thread decode keeps the
-   *  localStorage 'quicsrt-hw-mode' default). Default 'prefer-hardware'. */
-  hwMode?: 'prefer-hardware' | 'prefer-software';
+   *  localStorage 'quicsrt-hw-mode' default). Default 'no-preference' (the
+   *  browser falls back to software decode where no hardware decoder
+   *  exists). */
+  hwMode?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
   /** In decodeInWorker mode, sink worker-decoded audio (AudioData) through a
    *  MediaStreamTrackGenerator into the viewer's standard <audio>/mute path
    *  instead of emitting onDecodedAudio (default — host owns the AudioData

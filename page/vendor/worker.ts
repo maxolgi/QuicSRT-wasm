@@ -56,7 +56,7 @@ export interface StatsMsg {
 export type DemuxStatsMsg = DemuxStats;
 
 export type WorkerCmd =
-  | { cmd: 'init'; url: string; certHash: Uint8Array | null; latencyMs: number; decodeInWorker?: boolean; hwMode?: 'prefer-hardware' | 'prefer-software'; verbose?: boolean }
+  | { cmd: 'init'; url: string; certHash: Uint8Array | null; latencyMs: number; decodeInWorker?: boolean; hwMode?: 'no-preference' | 'prefer-hardware' | 'prefer-software'; verbose?: boolean }
   | { cmd: 'visibility'; visible: boolean }
   | { cmd: 'stop' }
   | { cmd: 'debug-rate'; ms: number }
@@ -86,7 +86,7 @@ let VERBOSE = false;
 // VideoDecoder hardwareAcceleration preference, forwarded from the `init`
 // command for the same reason (workers cannot read 'quicsrt-hw-mode' from
 // localStorage). Undefined = keep the pipeline's loadHwMode() default.
-let hwMode: 'prefer-hardware' | 'prefer-software' | undefined;
+let hwMode: 'no-preference' | 'prefer-hardware' | 'prefer-software' | undefined;
 
 let rx: SrtReceiver | null = null;
 let demux: Demuxer | null = null;

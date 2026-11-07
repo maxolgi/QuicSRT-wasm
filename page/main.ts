@@ -19,10 +19,10 @@ const debugToggle = document.getElementById('debug-toggle') as HTMLButtonElement
 const debugRoot = document.getElementById('debug-root') as HTMLDivElement;
 
 // Hw/sw decode preference. The vendored VideoPipeline reads localStorage
-// 'quicsrt-hw-mode' when it is built (main thread, at mount) and defaults to
-// prefer-hardware, which throws OperationError on software-only machines.
-// ?decode=software|hardware seeds the preference before mount; the debug
-// panel's Tools tab switches hw mode live via VideoPipeline.setHwMode.
+// 'quicsrt-hw-mode' when it is built (main thread, at mount) and defaults
+// to 'no-preference' — the browser picks software where no hardware decoder
+// exists. ?decode=software|hardware seeds an explicit preference before
+// mount; the debug panel's Tools tab switches hw mode live via VideoPipeline.setHwMode.
 const decodeParam = new URLSearchParams(location.search).get('decode');
 if (decodeParam === 'software' || decodeParam === 'hardware') {
   localStorage.setItem('quicsrt-hw-mode', decodeParam === 'software' ? 'prefer-software' : 'prefer-hardware');

@@ -78,7 +78,7 @@ export interface TestActions {
   resetDecoder: () => void;
   reconnect: () => void;
   cycleLatency: () => void;
-  setHwMode: (mode: 'prefer-hardware' | 'prefer-software') => void;
+  setHwMode: (mode: 'no-preference' | 'prefer-hardware' | 'prefer-software') => void;
   setDecodePacing: (enabled: boolean) => void;
   setRenderPacing: (enabled: boolean) => void;
 }

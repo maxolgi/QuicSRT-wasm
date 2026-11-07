@@ -41,7 +41,9 @@ Viewer how-to:
   `?host=`/`?port=`/`?stream=` override.
 - Decode: `?decode=software|hardware` seeds the hw/sw WebCodecs preference
   (localStorage `quicsrt-hw-mode`); the `decode: hw/sw` button above the
-  stats line flips it (page reloads). Software-only machines need software.
+  stats line flips it (page reloads). The default is `no-preference`, which
+  works on software-only machines out of the box; an explicit software or
+  hardware choice is still available.
 - Publish (SRT ingest, any ffmpeg with libsrt; gateway port 9102):
 
       ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -c:v libx264 -preset veryfast -f mpegts "srt://127.0.0.1:9102?streamid=test&mode=caller&latency=120"

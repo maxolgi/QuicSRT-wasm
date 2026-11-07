@@ -582,11 +582,13 @@ function buildAv1CodecString(info: Av1SeqInfo): string {
 type VideoCodec = 'h264' | 'hevc' | 'av1';
 
 // Persisted hw-accel preference (written by VideoPipeline.setHwMode). Guarded —
-// this module also runs inside workers, which have no localStorage.
-function loadHwMode(): 'prefer-hardware' | 'prefer-software' {
-  return typeof localStorage !== 'undefined' && localStorage.getItem('quicsrt-hw-mode') === 'prefer-software'
-    ? 'prefer-software'
-    : 'prefer-hardware';
+// this module also runs inside workers, which have no localStorage. Defaults
+// to 'no-preference' so the browser picks software decode where no hardware
+// decoder exists ('prefer-hardware' throws on such machines).
+function loadHwMode(): 'no-preference' | 'prefer-hardware' | 'prefer-software' {
+  if (typeof localStorage === 'undefined') return 'no-preference';
+  const saved = localStorage.getItem('quicsrt-hw-mode');
+  return saved === 'prefer-software' || saved === 'prefer-hardware' ? saved : 'no-preference';
 }
 
 export class VideoPipeline {
@@ -632,7 +634,7 @@ export class VideoPipeline {
   // panel can A/B test hardware vs software decode paths without reconnecting.
   // Read from localStorage at construction so the choice survives reloads and
   // reconnects (each connect builds a fresh pipeline).
-  private hwMode: 'prefer-hardware' | 'prefer-software' = loadHwMode();
+  private hwMode: 'no-preference' | 'prefer-hardware' | 'prefer-software' = loadHwMode();
   private lastCodecString: string | null = null;
   private lastHwAccel: string | undefined = undefined;
   private lastProfile = 0;
@@ -676,7 +678,7 @@ export class VideoPipeline {
    * next feed() rather than waiting for a fresh keyframe. Callers should
    * follow up with resetDecoder() if they want a clean slate instead.
    */
-  setHwMode(mode: 'prefer-hardware' | 'prefer-software') {
+  setHwMode(mode: 'no-preference' | 'prefer-hardware' | 'prefer-software') {
     if (this.hwMode === mode) return;
     this.hwMode = mode;
     if (typeof localStorage !== 'undefined') localStorage.setItem('quicsrt-hw-mode', mode);

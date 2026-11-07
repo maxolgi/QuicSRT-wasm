@@ -12,7 +12,7 @@ export interface VideoStats {
   decodeFps: number;
   droppedFrames: number;
   hwAcceleration: string | undefined;
-  hwModePreference: 'prefer-hardware' | 'prefer-software';
+  hwModePreference: 'no-preference' | 'prefer-hardware' | 'prefer-software';
   reconfigureCount: number;
   profile: number;
   level: number;

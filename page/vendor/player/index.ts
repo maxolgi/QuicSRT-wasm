@@ -27,8 +27,10 @@ export interface PlayerOptions {
   /** Decode in the Web Worker; emit decodedframe/decodedaudio events instead of
    *  owning canvas/audio sinks. Default false. */
   decodeInWorker?: boolean;
-  /** VideoDecoder hardwareAcceleration preference. Default 'prefer-hardware'. */
-  hwMode?: 'prefer-hardware' | 'prefer-software';
+  /** VideoDecoder hardwareAcceleration preference. Default 'no-preference'
+   *  (the browser falls back to software decode where no hardware decoder
+   *  exists). */
+  hwMode?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
   /** Sink worker-decoded audio into the viewer's <audio>/mute path (decodeInWorker mode). Default false. */
   workerAudio?: boolean;
   /** Auto-reconnect on disconnect. Default true. Set false for custom reconnection. */
