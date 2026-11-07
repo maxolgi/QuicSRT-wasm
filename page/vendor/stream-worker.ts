@@ -207,7 +207,7 @@ async function doInit(url: string, certHash: Uint8Array | null, latencyMs: numbe
       probe = await VideoEncoder.isConfigSupported(vCfg);
     }
     if (!probe.supported) {
-      throw new Error(`VideoEncoder does not support codec ${videoCfg.codec}`);
+      throw new Error(`VideoEncoder does not support codec ${videoCfg.codec} at ${videoCfg.width}x${videoCfg.height} @ ${videoCfg.framerate}fps ${videoCfg.bitrate}Mbps`);
     }
 
     videoEncoder = new VideoEncoder({
