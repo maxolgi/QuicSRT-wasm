@@ -28,12 +28,15 @@ import type { PublishCmd, PublishMsg, EncodeStats } from './vendor/stream-worker
 import type { StatsMsg } from './vendor/worker';
 import {
   detectCodec,
+  CODEC_CANDIDATES,
+  pickEncodableCodec,
   AudioGraphManager,
   FramePump,
   attachDebugResizer,
   formatPubStats,
   hexToBytes,
 } from './vendor/shared/publish';
+import type { EncodablePick } from './vendor/shared/publish';
 
 // ─── Call defaults ────────────────────────────────────────────────
 
@@ -107,6 +110,10 @@ function setPanelVisible(visible: boolean) {
 // ─── State ────────────────────────────────────────────────────────
 
 let worker: Worker | null = null;
+let encPick: EncodablePick | null = null;
+// What the FramePump samples: the preview <video> normally, or the scale
+// canvas while a scaled pick is active.
+let frameSource: HTMLVideoElement | HTMLCanvasElement = previewEl;
 let captureStream: MediaStream | null = null;
 let publishing = false;
 let capturing = false;
@@ -115,7 +122,7 @@ let detectedCodec: string | null = null;
 const audio = new AudioGraphManager((msg) => log(msg, 'err'));
 
 const framePump = new FramePump({
-  getPreviewEl: () => previewEl,
+  getPreviewEl: () => frameSource,
   isPublishing: () => publishing && worker !== null,
   postFrame: (frame) => {
     const cmd: PublishCmd = { cmd: 'frame', frame };
@@ -123,6 +130,16 @@ const framePump = new FramePump({
   },
   getFps: () => CALL_FPS,
 });
+
+// Tear the encoder pre-flight pick down and point the frame pump back at
+// the preview element (the preview itself keeps showing the native capture).
+function stopEncPick(): void {
+  if (encPick) {
+    encPick.stop();
+    encPick = null;
+  }
+  frameSource = previewEl;
+}
 
 // Seat-claim state
 let room = '';
@@ -309,11 +326,40 @@ async function trySeat(seat: number, attemptGen: number): Promise<void> {
   log(`Claiming seat ${seat} (${publishStream})…`, 'info');
   callStatus(`joining as seat ${seat}…`);
 
+  // Encoder pre-flight: ladder-probe the camera size (detected suggestion
+  // first, then CODEC_CANDIDATES); scale to 1280-wide via a canvas when
+  // nothing encodes the native size.
   const vTrack = captureStream?.getVideoTracks()[0];
   const settings = vTrack?.getSettings();
-  const width = settings?.width ?? 1280;
-  const height = settings?.height ?? 720;
-  const chosenCodec = detectedCodec ?? 'avc1.640028';
+  const nativeW = settings?.width ?? 1280;
+  const nativeH = settings?.height ?? 720;
+  stopEncPick();
+  const pick = await pickEncodableCodec({
+    track: vTrack ?? null,
+    width: nativeW,
+    height: nativeH,
+    framerate: CALL_FPS,
+    bitrateMbps: CALL_BITRATE_MBPS,
+    candidates: [detectedCodec, ...CODEC_CANDIDATES.map((c) => c.codec)].filter((c): c is string => c !== null),
+  });
+  if (attemptGen !== claimGen) {
+    pick?.stop(); // hangup raced the probe — don't leak the scale pump
+    return;
+  }
+  encPick = pick;
+  if (!encPick) {
+    failCall(`No encoder for ${nativeW}x${nativeH} — try a smaller camera.`);
+    return;
+  }
+  if (encPick.note) {
+    log(encPick.note, 'info');
+    // The preview keeps showing the native capture; the frame pump
+    // samples the scaled canvas instead.
+    frameSource = encPick.scaleCanvas!;
+  }
+  const width = encPick.width;
+  const height = encPick.height;
+  const chosenCodec = encPick.codec;
 
   const url = buildWtUrl(publishStream);
 
@@ -321,7 +367,10 @@ async function trySeat(seat: number, attemptGen: number): Promise<void> {
   // call.tsx's vite new URL('./stream-worker.ts')).
   worker = new Worker('/bundle/publish_worker.js', { type: 'module' });
   worker.onmessage = (e: MessageEvent) => handlePublishMsg(e.data as PublishMsg, attemptGen);
-  worker.onerror = (e) => { log(`worker error: ${e.message}`, 'err'); };
+  worker.onerror = (e) => {
+    if (attemptGen !== claimGen) return;
+    failCall(`Worker error: ${e.message || 'worker died'}`);
+  };
 
   const cmd: PublishCmd = {
     cmd: 'init',
@@ -394,21 +443,19 @@ function handlePublishMsg(msg: PublishMsg, attemptGen: number) {
       mountRemote(seatStreamName(claimedSeat === 1 ? 2 : 1));
       break;
     case 'close':
-      log('SRT closed', 'err');
-      setStatus('closed');
-      callStatus('connection lost');
-      framePump.stop();
+      failCall('Connection lost (SRT closed)');
       break;
     case 'wtClosed':
-      if (claimedSeat === 0) {
-        // Publish claim rejected before the handshake — seat is taken.
+      if (claimedSeat === 0 && !msg.error) {
+        // Clean WT close before the handshake — the seat is taken; the
+        // existing seat-fallback machinery handles it.
         handleClaimFailure(attemptGen);
+      } else if (claimedSeat === 0) {
+        // wtClosed WITH an error = worker init failed (encoder
+        // unsupported, WT refused) — an honest failure, not a collision.
+        failCall(`Publish failed: ${msg.error}`);
       } else {
-        if (msg.error) log(`WT closed: ${msg.error}`, 'err');
-        else log('WT closed', 'info');
-        setStatus('disconnected');
-        callStatus('disconnected');
-        framePump.stop();
+        failCall(msg.error ? `WT closed: ${msg.error}` : 'WT closed');
       }
       break;
     case 'stats':
@@ -566,9 +613,19 @@ joinBtn.addEventListener('click', async () => {
 
 hangupBtn.addEventListener('click', () => stopAll());
 
+// Honest failure: tear the call down, surface why, reset the lobby.
+function failCall(reason: string): void {
+  if (!publishing) return;
+  log(reason, 'err');
+  prejoinError.textContent = reason;
+  stopAll();
+  setStatus(`failed — ${reason}`);
+}
+
 function stopAll() {
   publishing = false;
   framePump.stop();
+  stopEncPick();
   claimGen++;
   claimedSeat = 0;
   tryingSeat = 0;
