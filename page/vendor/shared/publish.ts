@@ -54,6 +54,134 @@ export async function detectCodec(
   return null;
 }
 
+// ─── Encoder pre-flight: codec ladder + scale-to-fit ──────────────
+
+// Fixed H.264 fallbacks tried (after the caller's candidates) when the
+// native capture size must be scaled down — level 4.0/4.2 cover every
+// 1280-wide size the scaler produces.
+const SCALE_FALLBACK_CODECS = ['avc1.640028', 'avc1.64002A'];
+
+export interface EncodablePick {
+  codec: string;
+  /** encode dimensions — the native size, or the scaled size */
+  width: number;
+  height: number;
+  /** set when the native size had to be scaled:
+   *  "native WxH not encodable; scaled to WxH" */
+  note: string | null;
+  /** the scaled canvas the FramePump should sample instead of the
+   *  preview element (null when the native size is encodable as-is) */
+  scaleCanvas: HTMLCanvasElement | null;
+  /** tear the scale pump down (no-op when not scaled) */
+  stop(): void;
+}
+
+/**
+ * Pick a codec the browser can actually encode at the capture size; if
+ * none of the candidates fits, pump the capture through a canvas at
+ * 1280-wide (even height) and retry the ladder there. Probes mirror the
+ * worker's configure() config (annexb for non-AV1, the real Mbps) with
+ * no hardwareAcceleration bias — the worker retries prefer-software
+ * when prefer-hardware fails, so "either" is the honest answer here.
+ * Returns null when nothing encodes even scaled.
+ */
+export async function pickEncodableCodec(opts: {
+  track: MediaStreamTrack | null;
+  width: number;
+  height: number;
+  framerate: number;
+  bitrateMbps: number;
+  /** native ladder, most-preferred first */
+  candidates: string[];
+}): Promise<EncodablePick | null> {
+  const { track, width, height, framerate, bitrateMbps } = opts;
+  const candidates = [...new Set(opts.candidates)];
+  const fits = (codec: string, w: number, h: number): Promise<boolean> =>
+    (async () => {
+      try {
+        const cfg: VideoEncoderConfig = {
+          codec,
+          width: w,
+          height: h,
+          bitrate: bitrateMbps * 1_000_000,
+          framerate,
+        };
+        if (!codec.startsWith('av01')) {
+          (cfg as unknown as Record<string, unknown>).avc = { format: 'annexb' };
+        }
+        const probe = await VideoEncoder.isConfigSupported(cfg);
+        return !!probe.supported;
+      } catch {
+        return false;
+      }
+    })();
+
+  if (width > 0 && height > 0) {
+    for (const codec of candidates) {
+      if (await fits(codec, width, height)) {
+        return { codec, width, height, note: null, scaleCanvas: null, stop: () => {} };
+      }
+    }
+  }
+
+  // Nothing encodes the native size: scale to 1280-wide through a canvas
+  // and retry, the fixed H.264 fallbacks first.
+  if (!track || width <= 0 || height <= 0) return null;
+  const sw = 1280;
+  const sh = Math.max(2, Math.round(sw * height / width / 2) * 2);
+  const ladder = [...new Set([...SCALE_FALLBACK_CODECS, ...candidates])];
+  for (const codec of ladder) {
+    if (!await fits(codec, sw, sh)) continue;
+    // Bridge the capture through an offscreen video element:
+    // drawImage(MediaStreamTrack) is a non-standard extension some
+    // Chromium builds reject outright (TypeError), while every build
+    // draws a playing <video>.
+    const bridge = document.createElement('video');
+    bridge.muted = true;
+    bridge.playsInline = true;
+    bridge.style.cssText = 'position:fixed;left:-9999px;bottom:0';
+    bridge.srcObject = new MediaStream([track]);
+    document.body.appendChild(bridge);
+    // Wait (bounded) for the first frame so the canvas never starts
+    // blank-black on a healthy source.
+    await new Promise<void>((resolve) => {
+      if (bridge.readyState >= 2) return resolve();
+      bridge.onloadeddata = () => resolve();
+      setTimeout(resolve, 2000);
+    });
+    bridge.play().catch(() => {});
+    const canvas = document.createElement('canvas');
+    canvas.width = sw;
+    canvas.height = sh;
+    // Offscreen-but-laid-out so paints stay live (same treatment as the
+    // pages' animated canvas test source).
+    canvas.style.cssText = 'position:fixed;left:-9999px;bottom:0';
+    document.body.appendChild(canvas);
+    const ctx = canvas.getContext('2d')!;
+    let rafId = 0;
+    const pump = (): void => {
+      if (!canvas.isConnected) return; // stop() removed the canvas
+      try { ctx.drawImage(bridge, 0, 0, sw, sh); } catch { /* track ended */ }
+      rafId = requestAnimationFrame(pump);
+    };
+    pump();
+    return {
+      codec,
+      width: sw,
+      height: sh,
+      note: `native ${width}x${height} not encodable; scaled to ${sw}x${sh}`,
+      scaleCanvas: canvas,
+      stop: () => {
+        cancelAnimationFrame(rafId);
+        canvas.remove();
+        bridge.srcObject = null;
+        bridge.remove();
+      },
+    };
+  }
+  return null;
+}
+
 // ─── Hidden-tab timer worker (frame pump fallback) ────────────────
 
 export const TIMER_WORKER_SRC = `
@@ -204,7 +332,11 @@ export class AudioGraphManager {
 // ─── Frame pump ───────────────────────────────────────────────────
 
 export interface FramePumpDeps {
-  getPreviewEl: () => HTMLVideoElement;
+  /** the element whose pixels are pumped: the preview <video> normally,
+   *  or the scale canvas while a pickEncodableCodec() pick is active
+   *  (VideoFrame(video) throws on canvas-capture-backed videos in some
+   *  Chromium builds, so scaled publishing samples the canvas itself) */
+  getPreviewEl: () => HTMLVideoElement | HTMLCanvasElement;
   isPublishing: () => boolean;
   postFrame: (frame: VideoFrame) => void;
   getFps: () => number;
@@ -265,13 +397,23 @@ export class FramePump {
   private pumpFrame(): void {
     if (!this.deps.isPublishing()) return;
     const previewEl = this.deps.getPreviewEl();
-    if (this.credits > 0 && previewEl.readyState >= 2) {
-      const frame = new VideoFrame(previewEl);
-      if (frame.format === null) {
-        frame.close();
-      } else {
-        this.credits--;
-        this.deps.postFrame(frame);
+    const isCanvas = previewEl instanceof HTMLCanvasElement;
+    if (this.credits > 0 && (isCanvas || previewEl.readyState >= 2)) {
+      try {
+        // Canvas sources carry no media clock — stamp wall-clock µs
+        // (VideoFrame(canvas) requires an explicit timestamp).
+        const frame = isCanvas
+          ? new VideoFrame(previewEl, { timestamp: Math.round(performance.now() * 1000) })
+          : new VideoFrame(previewEl);
+        if (frame.format === null) {
+          frame.close();
+        } else {
+          this.credits--;
+          this.deps.postFrame(frame);
+        }
+      } catch {
+        // Transient (no current frame yet) — never let one bad tick
+        // kill the pump loop.
       }
     }
     this.schedule();

@@ -28,11 +28,14 @@ import {
   attachDebugResizer,
   formatPubStats,
   hexToBytes,
+  pickEncodableCodec,
 } from './vendor/shared/publish';
+import type { EncodablePick } from './vendor/shared/publish';
 
 // ─── DOM refs ─────────────────────────────────────────────────────
 
 const previewEl = document.getElementById('preview') as HTMLVideoElement;
+const scaleNoteEl = document.getElementById('scale-note') as HTMLDivElement;
 const sourceSelect = document.getElementById('source-select') as HTMLSelectElement;
 const cameraSelect = document.getElementById('camera-select') as HTMLSelectElement;
 const captureBtn = document.getElementById('capture-btn') as HTMLButtonElement;
@@ -132,6 +135,10 @@ function setPanelVisible(visible: boolean) {
 // ─── State ────────────────────────────────────────────────────────
 
 let worker: Worker | null = null;
+let encPick: EncodablePick | null = null;
+// What the FramePump samples: the preview <video> normally, or the scale
+// canvas while a scaled pick is active.
+let frameSource: HTMLVideoElement | HTMLCanvasElement = previewEl;
 let captureStream: MediaStream | null = null;
 let publishing = false;
 let capturing = false;
@@ -141,7 +148,7 @@ let detectedCodecLabel = '';
 const audio = new AudioGraphManager((msg) => log(msg, 'err'));
 
 const framePump = new FramePump({
-  getPreviewEl: () => previewEl,
+  getPreviewEl: () => frameSource,
   isPublishing: () => publishing && worker !== null,
   postFrame: (frame) => {
     const cmd: PublishCmd = { cmd: 'frame', frame };
@@ -149,6 +156,17 @@ const framePump = new FramePump({
   },
   getFps: () => +framerateSelect.value,
 });
+
+// Tear the encoder pre-flight pick down and point the frame pump back at
+// the preview element (the preview itself keeps showing the native capture).
+function stopEncPick(): void {
+  if (encPick) {
+    encPick.stop();
+    encPick = null;
+  }
+  frameSource = previewEl;
+  scaleNoteEl.hidden = true;
+}
 
 // ─── Codec auto-detection ─────────────────────────────────────────
 
@@ -344,6 +362,7 @@ async function startCapture(): Promise<void> {
   }
 
   // Stop any previous capture before wiring the new one.
+  stopEncPick();
   if (captureStream) {
     captureStream.getTracks().forEach((t) => t.stop());
   }
@@ -394,6 +413,7 @@ function stopCapture(): void {
     canvasEl.remove();
     canvasEl = null;
   }
+  stopEncPick();
   captureStream = null;
   previewEl.srcObject = null;
   capturing = false;
@@ -452,14 +472,54 @@ publishBtn.addEventListener('click', async () => {
   viewerLink.textContent = viewerUrl;
   setStatus('starting\u2026');
 
-  // Determine codec
+  // Encoder pre-flight: ladder-probe the capture size (auto = the
+  // detected suggestion first, then CODEC_CANDIDATES); when nothing
+  // encodes the native size, pickEncodableCodec scales through a canvas
+  // at 1280-wide and retries there.
+  stopEncPick();
   const vTrack = captureStream.getVideoTracks()[0];
   const settings = vTrack?.getSettings();
-  const width = canvasMode ? CANVAS_W : (settings?.width ?? 1280);
-  const height = canvasMode ? CANVAS_H : (settings?.height ?? 720);
+  const nativeW = canvasMode ? CANVAS_W : (settings?.width ?? 1280);
+  const nativeH = canvasMode ? CANVAS_H : (settings?.height ?? 720);
   const framerate = +framerateSelect.value;
   const bitrate = +bitrateNum.value;
-  const chosenCodec = codecSelect.value === 'auto' ? (detectedCodec ?? 'avc1.640028') : codecSelect.value;
+  const codecVal = codecSelect.value;
+  const candidates = codecVal === 'auto'
+    ? [detectedCodec, ...CODEC_CANDIDATES.map((c) => c.codec)].filter((c): c is string => c !== null)
+    : [codecVal];
+  encPick = await pickEncodableCodec({
+    track: vTrack ?? null,
+    width: nativeW,
+    height: nativeH,
+    framerate,
+    bitrateMbps: bitrate,
+    candidates,
+  });
+  if (!publishing) {
+    // Stop was clicked while probing — don't spawn a zombie worker.
+    encPick?.stop();
+    encPick = null;
+    return;
+  }
+  if (!encPick) {
+    publishing = false;
+    stopBtn.disabled = true;
+    publishBtn.disabled = false;
+    setStatus(`no encoder for ${nativeW}x${nativeH} — try a smaller source or lower settings`);
+    log(`no encoder found for ${nativeW}x${nativeH} @ ${framerate}fps ${bitrate}Mbps`, 'err');
+    return;
+  }
+  if (encPick.note) {
+    scaleNoteEl.textContent = encPick.note;
+    scaleNoteEl.hidden = false;
+    log(encPick.note, 'info');
+    // The preview keeps showing the native capture; the frame pump
+    // samples the scaled canvas instead.
+    frameSource = encPick.scaleCanvas!;
+  }
+  const chosenCodec = encPick.codec;
+  const width = encPick.width;
+  const height = encPick.height;
   const isAv1 = chosenCodec.startsWith('av01');
 
   // Determine audio config
@@ -488,7 +548,7 @@ publishBtn.addEventListener('click', async () => {
   // equivalent of stream.tsx's vite new URL('./stream-worker.ts'))
   worker = new Worker('/bundle/publish_worker.js', { type: 'module' });
   worker.onmessage = (e: MessageEvent) => handleWorkerMsg(e.data as PublishMsg);
-  worker.onerror = (e) => { log(`worker error: ${e.message}`, 'err'); };
+  worker.onerror = (e) => fail(`worker error: ${e.message || 'worker died'}`);
 
   const cmd: PublishCmd = {
     cmd: 'init',
@@ -516,6 +576,7 @@ stopBtn.addEventListener('click', () => stopAll());
 function stopAll() {
   publishing = false;
   framePump.stop();
+  stopEncPick();
   pbHandle?.disconnect();
   viewerLink.style.display = 'none';
   if (worker) {
@@ -528,6 +589,15 @@ function stopAll() {
   stopBtn.disabled = true;
   framePump.resetCredits();
   setStatus('stopped');
+}
+
+// Honest failure: tear the session down and reset the controls — a dead
+// worker never leaves the page claiming to be publishing.
+function fail(reason: string): void {
+  if (!publishing) return;
+  log(reason, 'err');
+  stopAll();
+  setStatus(`failed — ${reason}`);
 }
 
 // ─── Worker message handler ───────────────────────────────────────
@@ -560,15 +630,10 @@ function handleWorkerMsg(msg: PublishMsg) {
       }
       break;
     case 'close':
-      log('SRT closed', 'err');
-      setStatus('closed');
-      framePump.stop();
+      fail('SRT closed');
       break;
     case 'wtClosed':
-      if (msg.error) log(`WT closed: ${msg.error}`, 'err');
-      else log('WT closed', 'info');
-      setStatus('disconnected');
-      framePump.stop();
+      fail(msg.error ? `WT closed: ${msg.error}` : 'WT closed');
       break;
     case 'stats':
       store.srtStats.value = msg.stats;

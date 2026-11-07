@@ -74,6 +74,7 @@
       .audio-row select { min-width: 180px; }
       input[type="range"] { width: 80px; vertical-align: middle; }
       #pub-status { margin-top: 8px; font-size: 12px; color: #999; }
+      .scale-note { margin-top: 4px; font-size: 12px; color: #fc6; }
       .pub-stats { font-size: 12px; color: #999; line-height: 1.6; }
 
       /* Dark-themed thin scrollbars */
@@ -206,6 +207,7 @@
       <div class="video-slot">
         <h2>Capture</h2>
         <video id="preview" width="640" height="360" muted playsinline></video>
+        <div id="scale-note" class="scale-note" hidden></div>
         <div class="controls">
           <select id="source-select">
             <option value="screen">Screen</option>
