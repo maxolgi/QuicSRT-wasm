@@ -131,6 +131,14 @@ export interface ViewerHandle {
   setStream(name: string): void;
   /** Mute or unmute audio. Works without any DOM element. */
   setMuted(muted: boolean): void;
+  /** Set audio volume 0..1 (clamped). Persists across reconnects and applies
+   *  to the <audio> element and the PCM gain node. Internal — the Player
+   *  layer exposes this as media-element `volume`. */
+  setVolume(v: number): void;
+  /** Suspend or resume audio output: <audio> element pause/play + PCM
+   *  AudioContext suspend/resume. Persists across reconnects. Internal —
+   *  the Player layer drives it from play()/pause(). */
+  setAudioSuspended(suspended: boolean): void;
   /** Tab visibility changed (drives worker visibility message). */
   onVisibilityChange(visible: boolean): void;
   /** Get the current video pipeline (or null). */
@@ -207,6 +215,10 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
   let streamOverride: string | null = null;
   let appliedStream: string | null = null;
   let mutedState = true;
+  // Persisted audio prefs. The sinks (audio element, PCM player) are recreated
+  // per connection, so these are re-applied at each creation site.
+  let volumePref = 1;
+  let audioSuspendedPref = false;
 
   function log(msg: string, cls = '') {
     ui.log(msg, cls);
@@ -298,6 +310,15 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     ui.onDrift?.(null);
   }
 
+  // Re-apply persisted audio prefs to the <audio> element. It is recreated
+  // per connection (wireAudio / workerAudio sink), so volume and the suspend
+  // state must be re-applied at each creation site.
+  function applyAudioElPrefs() {
+    if (!audioEl) return;
+    audioEl.volume = volumePref;
+    if (audioSuspendedPref) audioEl.pause();
+  }
+
   function wireAudio() {
     if (!audio || !audioReady) return;
     const track = audio.track;
@@ -308,6 +329,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
       }
       audioEl.srcObject = new MediaStream([track]);
       audioEl.muted = mutedState;
+      applyAudioElPrefs();
       log(mutedState ? 'audio ready (muted — click to unmute)' : 'audio ready', 'info');
       if (muteBtn) { muteBtn.disabled = false; muteBtn.classList.toggle('muted', mutedState); }
     } else {
@@ -500,6 +522,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
               }
               audioEl.srcObject = new MediaStream([gen]);
               audioEl.muted = mutedState;
+              applyAudioElPrefs();
               log(mutedState ? 'audio ready (muted — click to unmute)' : 'audio ready', 'info');
               if (muteBtn) { muteBtn.disabled = false; muteBtn.classList.toggle('muted', mutedState); }
               audioReady = true;
@@ -536,11 +559,14 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
         if (!pcmPlayer) {
           pcmPlayer = new PcmPlayer();
           pcmPlayer.setMuted(mutedState);
+          pcmPlayer.setVolume(volumePref);
           if (ui.onAudioMeter) pcmPlayer.onMeter(ui.onAudioMeter);
         }
         if (!pcmPlayer.ready) {
           void pcmPlayer.init(msg.channelCount).then(() => {
-            void pcmPlayer?.resume();
+            // init() resumes the AudioContext; re-suspend when the pref says so.
+            if (audioSuspendedPref) void pcmPlayer?.suspend();
+            else void pcmPlayer?.resume();
             pcmPlayer?.feed(msg.samples, msg.channelCount);
             if (muteBtn) { muteBtn.disabled = false; muteBtn.classList.toggle('muted', mutedState); }
           });
@@ -602,10 +628,29 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     mutedState = muted;
     if (audioEl) {
       audioEl.muted = muted;
-      if (!muted) audioEl.play().catch((e) => log(`audio play failed: ${e}`, 'err'));
+      // A suspended element stays paused; unmuting alone must not restart it.
+      if (!muted && !audioSuspendedPref) audioEl.play().catch((e) => log(`audio play failed: ${e}`, 'err'));
     }
     pcmPlayer?.setMuted(muted);
     if (muteBtn) muteBtn.classList.toggle('muted', muted);
+  }
+
+  function setVolume(v: number) {
+    // Clamp 0..1 (HTMLMediaElement.volume throws on NaN/out-of-range).
+    volumePref = Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+    if (audioEl) audioEl.volume = volumePref;
+    pcmPlayer?.setVolume(volumePref);
+  }
+
+  function setAudioSuspended(suspended: boolean) {
+    audioSuspendedPref = suspended;
+    if (suspended) {
+      audioEl?.pause();
+      void pcmPlayer?.suspend();
+    } else {
+      if (audioEl) audioEl.play().catch((e) => log(`audio play failed: ${e}`, 'err'));
+      void pcmPlayer?.resume();
+    }
   }
 
   return {
@@ -615,6 +660,8 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     getLatencyMs: () => currentLatencyMs,
     setStream,
     setMuted,
+    setVolume,
+    setAudioSuspended,
     onVisibilityChange(visible: boolean) {
       worker?.postMessage({ cmd: 'visibility', visible });
     },

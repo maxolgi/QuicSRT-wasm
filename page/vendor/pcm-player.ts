@@ -22,6 +22,7 @@ export class PcmPlayer {
   private sampleRate = 48000;
   private droppedPackets = 0;
   private _muted = true;
+  private _volume = 1;
 
   get ready(): boolean {
     return this.workletNode !== null;
@@ -48,7 +49,7 @@ export class PcmPlayer {
       outputChannelCount: [channelCount],
     });
     this.gainNode = this.audioCtx.createGain();
-    this.gainNode.gain.value = this._muted ? 0 : 1;
+    this.gainNode.gain.value = this._muted ? 0 : this._volume;
     this.workletNode.connect(this.gainNode);
     this.gainNode.connect(this.audioCtx.destination);
   }
@@ -66,7 +67,13 @@ export class PcmPlayer {
 
   setMuted(muted: boolean): void {
     this._muted = muted;
-    if (this.gainNode) this.gainNode.gain.value = muted ? 0 : 1;
+    if (this.gainNode) this.gainNode.gain.value = muted ? 0 : this._volume;
+  }
+
+  /** Volume 0..1. Composes with mute: effective gain is 0 when muted. */
+  setVolume(v: number): void {
+    this._volume = v;
+    if (this.gainNode && !this._muted) this.gainNode.gain.value = v;
   }
 
   /** No-op: metering moved to WASM. Stub kept until AudioTab is updated. */
@@ -75,6 +82,12 @@ export class PcmPlayer {
   async resume(): Promise<void> {
     if (this.audioCtx?.state === 'suspended') {
       await this.audioCtx.resume();
+    }
+  }
+
+  async suspend(): Promise<void> {
+    if (this.audioCtx?.state === 'running') {
+      await this.audioCtx.suspend();
     }
   }
 
