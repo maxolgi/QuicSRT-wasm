@@ -956,6 +956,10 @@ export class VideoPipeline {
         codedWidth: cfg.codedWidth,
         codedHeight: cfg.codedHeight,
         hardwareAcceleration: this.hwMode,
+        // Latency over throughput: hardware decoders otherwise buffer
+        // internally and emit frames in bursts, which the small render
+        // ring drops.
+        optimizeForLatency: true,
       } as VideoDecoderConfig);
     } catch (e) {
       this.cb.onError(e);
@@ -1021,6 +1025,9 @@ export class VideoPipeline {
         codedWidth,
         codedHeight,
         hardwareAcceleration: this.hwMode,
+        // Mirrors the real configure() — must stay in sync or the probe
+        // can pass a config the real call rejects.
+        optimizeForLatency: true,
       } as VideoDecoderConfig);
 
       let chosen: string | null = null;
