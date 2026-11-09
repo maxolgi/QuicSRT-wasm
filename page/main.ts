@@ -35,12 +35,16 @@ if (decodeParam === 'software' || decodeParam === 'hardware') {
 // through the standard <audio>/mute path.
 const workerMode = new URLSearchParams(location.search).get('worker') === '1';
 
-// ?sink=video: output to the <video> element below via a video
-// MediaStreamTrackGenerator (GPU-side compositing — A/B against the
-// default canvas path). Single player: both players would contend for
-// the one element, so rendition switches go serial, not overlap.
+// ?sink=video (default) / ?sink=canvas: output via a <video> element and a
+// video MediaStreamTrackGenerator — GPU-side compositing, and the element's
+// media pipeline keeps presenting regardless of the tab's visibility state.
+// The canvas path (rAF-driven presentation) stays available for A/B and as
+// the automatic fallback where MSTG is unsupported. Single player in sink
+// mode: both players would contend for the one element, so rendition
+// switches go serial, not overlap.
 const videoEl = document.getElementById('video-el') as HTMLVideoElement | null;
-const sinkMode = new URLSearchParams(location.search).get('sink') === 'video' && !!videoEl;
+const sinkParam = new URLSearchParams(location.search).get('sink');
+const sinkMode = sinkParam !== 'canvas' && !!videoEl;
 
 // --- Pacing persistence (render ON / decode OFF by default, as in advanced.tsx) ---
 const savedRenderPacing = localStorage.getItem('quicsrt-pacing-render') !== '0';
