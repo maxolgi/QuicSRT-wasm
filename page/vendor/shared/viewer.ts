@@ -369,7 +369,9 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     el.muted = mutedState;
     el.volume = volumePref;
     if (audioSuspendedPref) el.pause();
-    else el.play().catch((e) => log(`video play failed: ${e}`, 'err'));
+    // Rejection here is a benign race (e.g. play() interrupted by a pause()
+    // or a srcObject swap during reconnect), not a playback failure.
+    else el.play().catch((e) => log(`video play failed: ${e}`, 'info'));
   }
 
   function wireAudio() {

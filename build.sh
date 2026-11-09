@@ -13,9 +13,10 @@ Commands:
     engine   Build the M3 JS engine wrapper module (build/srt_engine.mjs,
              driven through js/srt_engine.js; gate: node js/test_contract.mjs)
     page     Bundle the M3 player page + M6 publisher page + the 1:1 call
-             page (page/bundle/{main,publish,call,worker,publish_worker}.js
-             plus the shared/lazy chunk-* files) with the local esbuild
-             (package.json - npm install);
+             page + the video.js demo page
+             (page/bundle/{main,publish,call,videojs,worker,publish_worker}.js
+             plus the shared/lazy chunk-* files and videojs.css) with the
+             local esbuild (package.json - npm install);
              needs ./build.sh engine first
     deploy   Assemble the self-contained dist/ tree the supervised gateway
              serves as web_root: page html + page/bundle + the engine module
@@ -95,17 +96,21 @@ case "${1:-}" in
         # the emcc module.
         "$ESBUILD" page/vendor/stream-worker.ts --bundle --format=esm \
             --external:../build/srt_engine.mjs --outfile=page/bundle/publish_worker.js
-        # Player + publisher + call entries in ONE esbuild run with
-        # --splitting: emits page/bundle/main.js + page/bundle/publish.js +
-        # page/bundle/call.js (--entry-names=[name]) plus
+        # Player + publisher + call + videojs-demo entries in ONE esbuild
+        # run with --splitting: emits page/bundle/main.js +
+        # page/bundle/publish.js + page/bundle/call.js +
+        # page/bundle/videojs.js (--entry-names=[name]) plus
         # chunk-[name]-[hash] files for shared and lazily-imported code -
         # notably the Preact debug panel (preact/chart.js, eruda behind its
         # own dynamic import in ConsoleTab). main.ts dynamic-imports the
         # panel so it stays off the viewer's critical path; publish.tsx and
         # call.tsx (the .tsx entries the --jsx flags are for) import the
-        # Panel directly, as the rust stream.tsx/call.tsx do. Deploy copies
-        # page/bundle/* wholesale, so every chunk rides along.
-        "$ESBUILD" page/main.ts page/publish.tsx page/call.tsx --bundle --format=esm --splitting \
+        # Panel directly, as the rust stream.tsx/call.tsx do. videojs.ts
+        # imports video-js.css, so esbuild emits the css sidecar
+        # page/bundle/videojs.css next to it (linked from videojs.html).
+        # Deploy copies page/bundle/* wholesale, so every chunk (and that
+        # css) rides along.
+        "$ESBUILD" page/main.ts page/publish.tsx page/call.tsx page/videojs.ts --bundle --format=esm --splitting \
             --outdir=page/bundle --entry-names='[name]' --chunk-names='chunk-[name]-[hash]' \
             --jsx=automatic --jsx-import-source=preact
         ;;

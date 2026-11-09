@@ -119,7 +119,24 @@ export class QuicSrtTech extends Tech {
 
   constructor(options: TechInitOptions, ready?: () => void) {
     super(options, ready);
-    this.techOpts = options?.quicsrt ?? {};
+    // video.js FLATTENS tech options into the constructor options: the
+    // player's `quicsrt: { workerUrl, … }` object is Object.assign'ed into
+    // the init options top level (Player#loadTech_), not nested. Pick the
+    // SDK-relevant keys off the top level; an explicitly nested `quicsrt`
+    // object is honored too for direct-construction callers.
+    const flat = options as unknown as Partial<PlayerOptions>;
+    this.techOpts = {
+      ...(options?.quicsrt ?? {}),
+      ...(flat.workerUrl !== undefined ? { workerUrl: flat.workerUrl } : {}),
+      ...(flat.certHash !== undefined ? { certHash: flat.certHash } : {}),
+      ...(flat.hwMode !== undefined ? { hwMode: flat.hwMode } : {}),
+      ...(flat.latencyMs !== undefined ? { latencyMs: flat.latencyMs } : {}),
+      ...(flat.host !== undefined ? { host: flat.host } : {}),
+      ...(flat.port !== undefined ? { port: flat.port } : {}),
+      ...(flat.stream !== undefined ? { stream: flat.stream } : {}),
+      ...(flat.token !== undefined ? { token: flat.token } : {}),
+      ...(flat.url !== undefined ? { url: flat.url } : {}),
+    };
     this.initialMuted = options?.muted === true;
 
     // Like Html5, apply a source handed to the constructor directly; further
