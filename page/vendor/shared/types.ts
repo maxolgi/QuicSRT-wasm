@@ -11,9 +11,6 @@ export interface VideoStats {
   decodedCount: number;
   decodeFps: number;
   droppedFrames: number;
-  /** Access units dropped while decode was suspended (player pause),
-   * including the post-resume wait for the next keyframe. */
-  droppedWhileSuspended: number;
   hwAcceleration: string | undefined;
   hwModePreference: 'no-preference' | 'prefer-hardware' | 'prefer-software';
   reconfigureCount: number;
@@ -29,8 +26,6 @@ export interface AudioStats {
   decodeQueueSize: number;
   packetsDecoded: number;
   droppedPackets: number;
-  /** Packets dropped while decode was suspended (player pause). */
-  droppedWhileSuspended: number;
   sampleRate: number;
   channels: number;
   outputMode: 'MediaStreamTrackGenerator' | 'AudioWorklet' | null;
@@ -67,17 +62,6 @@ export interface RenderStats {
    * stall slot, ≥2 = burst slot (forces a drop).
    */
   arrivalHistogram: number[];
-}
-
-// <video>-element sink stats. A deliberately minimal subset of RenderStats:
-// the sink keeps no presentation ring, so the ring/pacing/arrival fields do
-// not apply.
-export interface VideoSinkStats {
-  frameCount: number;
-  droppedWhilePaused: number;
-  currentPtsUs: number | null;
-  width: number;
-  height: number;
 }
 
 // Mirrors the WASM `DebugSnapshot` (crates/mpeg2ts-wasm/src/lib.rs).

@@ -87,11 +87,6 @@ export class CanvasRenderer {
   // setRenderPacing(false) to trust SRT's TSBPD layer instead.
   private renderPacing = true;
 
-  // While true, presentation is frozen: draw() closes incoming frames on
-  // arrival (the ring stays empty) and present() does nothing, so the
-  // last drawn frame stays visible on the canvas.
-  private paused = false;
-
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     const ctx = canvas.getContext('2d');
@@ -114,24 +109,7 @@ export class CanvasRenderer {
     }
   }
 
-  /** Freeze presentation: incoming frames are closed on arrival, the last drawn frame stays visible. */
-  pause() {
-    this.paused = true;
-    for (const f of this.ring) { try { f.close(); } catch {} }
-    this.ring = [];
-  }
-
-  /** Un-freeze presentation; the next arriving frame re-anchors at the live edge. */
-  resume() {
-    this.paused = false;
-  }
-
   draw(frame: VideoFrame) {
-    if (this.paused) {
-      // Discard arrivals without state updates; the ring must not grow.
-      frame.close();
-      return;
-    }
     this.lastPtsUs = frame.timestamp;
     this.arrivalsSinceRaf++;
     if (!this.renderPacing) {
@@ -215,7 +193,6 @@ export class CanvasRenderer {
   }
 
   private present() {
-    if (this.paused) return;
     if (!this.renderPacing) {
       if (this.ring.length === 0) return;
       const frame = this.ring.shift()!;
