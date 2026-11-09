@@ -653,6 +653,13 @@ export class VideoPipeline {
   // DTS-paced decode is off by default (trust SRT TSBPD). Enable via
   // setDecodePacing(true) to defer decode submission by DTS.
   private decodePacing = false;
+  // Decode suspension (player paused): feed() drops access units before any
+  // decode submission. After resume, non-key access units stay dropped until
+  // the next keyframe — the decoder cannot resume mid-GOP once its reference
+  // frames have been dropped.
+  private decodeSuspended = false;
+  private awaitKeyframe = false;
+  private droppedWhileSuspended = 0;
 
   constructor(cb: DecoderCallbacks) {
     this.cb = cb;
@@ -693,13 +700,16 @@ export class VideoPipeline {
   /**
    * Toggle DTS-paced decode. Off by default — chunks decode immediately,
    * trusting SRT's TSBPD layer upstream. When disabling mid-stream, any
-   * deferred chunks are flushed to the decoder and the drain RAF is
-   * cancelled.
+   * deferred chunks are flushed to the decoder (discarded while decode is
+   * suspended) and the drain RAF is cancelled.
    */
   setDecodePacing(enabled: boolean) {
     this.decodePacing = enabled;
     if (!enabled) {
-      this.flushDeferred();
+      // Flushing would decode the backlog; while suspended it is discarded
+      // instead (feed() accepts nothing new until resume).
+      if (this.decodeSuspended) this.dropDeferred();
+      else this.flushDeferred();
       if (this.rafId !== null) {
         clearTimeout(this.rafId as any);
         this.rafId = null;
@@ -708,8 +718,44 @@ export class VideoPipeline {
     }
   }
 
+  /**
+   * Suspend decode submission (player pause). While suspended, feed() drops
+   * every access unit before any decode work; on resume, decoding restarts
+   * at the next keyframe (see the feed gate). Deferred (DTS-paced) chunks
+   * are discarded, not flushed, and their drain timer is cancelled.
+   */
+  setDecodeSuspended(suspended: boolean) {
+    if (this.decodeSuspended === suspended) return;
+    this.decodeSuspended = suspended;
+    if (suspended) {
+      this.dropDeferred();
+      if (this.rafId !== null) {
+        clearTimeout(this.rafId as any);
+        this.rafId = null;
+      }
+    } else {
+      this.awaitKeyframe = true;
+    }
+  }
+
   /** Feed a PES payload from the demuxer (Annex-B byte stream, or AV1 OBUs). */
   feed(payload: Uint8Array, pts: number | null, isKeyframe: boolean, dts: number | null = null, nalOffsets: Uint32Array = new Uint32Array(), nalTypes: Uint8Array = new Uint8Array()) {
+    // Decode suspension: a paused player must not burn decode cycles — drop
+    // the access unit before any parse or submission work.
+    if (this.decodeSuspended) {
+      this.droppedWhileSuspended++;
+      return;
+    }
+    if (this.awaitKeyframe) {
+      // Resumed after a suspension: mid-GOP deltas are undecodable until the
+      // reference chain restarts at a keyframe.
+      if (!this.isKeyAu(nalTypes, isKeyframe)) {
+        this.droppedWhileSuspended++;
+        return;
+      }
+      this.awaitKeyframe = false;
+    }
+
     // AV1 path: low-overhead OBU bitstream, not Annex B. Honor an explicit
     // PMT hint, or a previously-pinned av1 detection. nalOffsets/nalTypes are
     // empty for AV1 PES.
@@ -803,14 +849,29 @@ export class VideoPipeline {
     this.emitAu(payload, nalOffsets, nalTypes, pts, dts);
   }
 
+  /**
+   * Keyframe detection for one PES access unit — the same signals the decode
+   * path uses to type chunks (emitAu's hasIdr): IDR NAL for H.264/HEVC, and
+   * the demuxer random-access flag when there is no NAL table to scan (AV1
+   * PES never carry one). Shared with the decode-suspension resume gate.
+   */
+  private isKeyAu(nalTypes: Uint8Array, isKeyframe: boolean): boolean {
+    if (nalTypes.length === 0) return isKeyframe;
+    switch (this.codec ?? this.codecHint) {
+      case 'hevc':
+        return nalTypes.some(t => t === HEVC_IDR_W_RADL || t === HEVC_IDR_N_LP);
+      case 'av1':
+        return isKeyframe;
+      default:
+        return nalTypes.some(t => t === NAL_IDR);
+    }
+  }
+
   private emitAu(payload: Uint8Array, nalOffsets: Uint32Array, nalTypes: Uint8Array, pts: number | null, dts: number | null) {
     if (!this.decoder || this.decoder.state !== 'configured') return;
     const isHevc = this.codec === 'hevc';
 
-    // Check for IDR
-    const hasIdr = isHevc
-      ? nalTypes.some(t => t === HEVC_IDR_W_RADL || t === HEVC_IDR_N_LP)
-      : nalTypes.some(t => t === NAL_IDR);
+    const hasIdr = this.isKeyAu(nalTypes, false);
 
     // Build length-prefixed data for decode-relevant NALUs
     const typeFilter = isHevc
@@ -1168,6 +1229,12 @@ export class VideoPipeline {
     this.deferred = [];
   }
 
+  /** Discard deferred chunks without decoding them (decode suspended). */
+  private dropDeferred() {
+    this.droppedWhileSuspended += this.deferred.length;
+    this.deferred = [];
+  }
+
   private decodeChunk(chunk: EncodedVideoChunk) {
     if (!this.decoder || this.decoder.state !== 'configured') return;
     try {
@@ -1233,6 +1300,7 @@ export class VideoPipeline {
       decodedCount: this.decodedCount,
       decodeFps: this.decodeFps,
       droppedFrames: this.droppedVideo,
+      droppedWhileSuspended: this.droppedWhileSuspended,
       hwAcceleration: this.lastHwAccel,
       hwModePreference: this.hwMode,
       reconfigureCount: this.reconfigureCount,
@@ -1326,6 +1394,8 @@ abstract class AudioPipelineBase {
   protected sampleRate = 48000;
   protected channels = 2;
   protected droppedAudio = 0;
+  protected decodeSuspended = false;
+  protected droppedWhileSuspended = 0;
   protected lastWrittenPtsUs: number | null = null;
   protected lastWrittenWallMs = 0;
   protected codecString: string | null = null;
@@ -1343,6 +1413,16 @@ abstract class AudioPipelineBase {
     if (this.audioCtx?.state === 'suspended') {
       await this.audioCtx.resume();
     }
+  }
+
+  /**
+   * Suspend decode submission (player pause): packets are dropped at
+   * feedFrame() until resume. No keyframe wait is needed — every Opus/ADTS
+   * packet is an independently decodable frame, so the first packet after
+   * resume is always a clean restart point.
+   */
+  setDecodeSuspended(suspended: boolean) {
+    this.decodeSuspended = suspended;
   }
 
   abstract feed(payload: Uint8Array, pts: number | null): void;
@@ -1413,6 +1493,10 @@ abstract class AudioPipelineBase {
   }
 
   protected feedFrame(chunk: EncodedAudioChunk) {
+    if (this.decodeSuspended) {
+      this.droppedWhileSuspended++;
+      return;
+    }
     if (this.decoder && this.decoder.decodeQueueSize > 20) {
       this.droppedAudio++;
       if (this.droppedAudio % 30 === 0) {
@@ -1461,6 +1545,7 @@ abstract class AudioPipelineBase {
       decodeQueueSize: this.decoder?.decodeQueueSize ?? 0,
       packetsDecoded: this.packetsDecoded,
       droppedPackets: this.droppedAudio,
+      droppedWhileSuspended: this.droppedWhileSuspended,
       sampleRate: this.sampleRate,
       channels: this.channels,
       outputMode: this.generator ? 'MediaStreamTrackGenerator' : (this.workletNode ? 'AudioWorklet' : null),

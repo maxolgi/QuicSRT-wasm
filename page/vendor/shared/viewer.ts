@@ -149,6 +149,12 @@ export interface ViewerHandle {
    *  AudioContext suspend/resume. Persists across reconnects. Internal —
    *  the Player layer drives it from play()/pause(). */
   setAudioSuspended(suspended: boolean): void;
+  /** Suspend or resume the decode path (player pause): pipelines drop
+   *  encoded media before decode (main mode) and worker-decoded frames /
+   *  audio are closed at the message boundary (worker mode). Persists
+   *  across reconnects. Internal — the Player layer drives it from
+   *  play()/pause(). */
+  setDecodeSuspended(suspended: boolean): void;
   /** Tab visibility changed (drives worker visibility message). */
   onVisibilityChange(visible: boolean): void;
   /** Get the current video pipeline (or null). */
@@ -241,6 +247,10 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
   // per connection, so these are re-applied at each creation site.
   let volumePref = 1;
   let audioSuspendedPref = false;
+  // Same persistence for decode suspension: main-mode pipelines are recreated
+  // per connection, and worker-decoded frames are gated at the message
+  // boundary.
+  let decodeSuspendedPref = false;
 
   function log(msg: string, cls = '') {
     ui.log(msg, cls);
@@ -458,6 +468,8 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
         onError: (e) => log(`video err: ${e}`, 'err'),
         onConfigured: (info) => ui.onVideoConfigured(info),
       });
+      // Pipelines are recreated per connect — re-apply the persisted state.
+      video.setDecodeSuspended(decodeSuspendedPref);
     } else {
       // Worker-decode mode: no main-side pipeline. With a canvas the
       // transferred frames render locally (renderer owns the frames);
@@ -557,6 +569,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
             audio = isOpus
               ? new OpusAudioPipeline(audioCb)
               : new AacAudioPipeline(audioCb);
+            audio.setDecodeSuspended(decodeSuspendedPref);
           }
         }
         break;
@@ -565,11 +578,24 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
           firstFrame = false;
           ui.onFirstFrame(msg.frame.displayWidth, msg.frame.displayHeight);
         }
+        if (decodeSuspendedPref) {
+          // Decode suspended (paused): the frame arrived already decoded —
+          // release it here instead of feeding the sink/renderer (same
+          // close-on-discard discipline the sink applies while paused).
+          msg.frame.close();
+          break;
+        }
         if (videoSink) videoSink.feed(msg.frame);
         else if (renderer) renderer.draw(msg.frame); // worker-render mode: renderer owns the frame
         else ui.onDecodedFrame?.(msg.frame);
         break;
       case 'audioData':
+        if (decodeSuspendedPref) {
+          // Decode suspended (paused): release worker-decoded audio before
+          // the sink path (which would otherwise also create it lazily).
+          msg.data.close();
+          break;
+        }
         if (workerAudio) {
           if (!audioReady && !workerAudioFailed) {
             // Lazy sink, mirroring wireAudio(): MSTG audio track → element →
@@ -722,6 +748,16 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     }
   }
 
+  // Suspend the decode path alongside the audio-output suspend above: the
+  // main-mode pipelines drop encoded media, and in worker-decode mode the
+  // pref gates decoded frames/audio at the message boundary (the worker's
+  // own pipelines keep decoding — nothing tells them to stop).
+  function setDecodeSuspended(suspended: boolean) {
+    decodeSuspendedPref = suspended;
+    video?.setDecodeSuspended(suspended);
+    audio?.setDecodeSuspended(suspended);
+  }
+
   return {
     connect: doConnect,
     disconnect: doDisconnect,
@@ -731,6 +767,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     setMuted,
     setVolume,
     setAudioSuspended,
+    setDecodeSuspended,
     onVisibilityChange(visible: boolean) {
       worker?.postMessage({ cmd: 'visibility', visible });
     },

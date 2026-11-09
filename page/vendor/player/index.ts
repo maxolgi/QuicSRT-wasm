@@ -356,9 +356,11 @@ class Player extends EventTarget implements PlayerHandle {
     if (this._paused && hadFrames) {
       // Pause survives reconnects: the fresh renderer/sink default to live —
       // re-freeze them. Audio suspension persists via the viewer's suspend
-      // pref (re-applied at sink creation), no action needed here.
+      // pref (re-applied at sink creation), no action needed here; decode
+      // suspension persists the same way and is re-asserted below.
       this.viewer.getRenderer()?.pause();
       this.viewer.getSink()?.pause();
+      this.viewer.setDecodeSuspended(true);
     } else {
       // Frames render → not paused (a connect()-only host never looks paused).
       this._paused = false;
@@ -426,6 +428,10 @@ class Player extends EventTarget implements PlayerHandle {
     this.manualDisconnect = false;
     // A connect() starts a new session — clears any previous 'ended'.
     this._ended = false;
+    // The new session plays (pause persists only across automatic
+    // reconnects): clear any decode suspension so frames flow and
+    // onFirstFrame can fire.
+    this.viewer.setDecodeSuspended(false);
     this.connectPromise = new Promise<void>((resolve, reject) => {
       this.resolveConnect = resolve;
       this.rejectConnect = reject;
@@ -460,6 +466,7 @@ class Player extends EventTarget implements PlayerHandle {
       this.viewer.getRenderer()?.resume();
       this.viewer.getSink()?.resume();
       this.viewer.setAudioSuspended(false);
+      this.viewer.setDecodeSuspended(false);
       this.emit('play');
       this.startTimeupdate();
       this.emit('playing');
@@ -480,6 +487,10 @@ class Player extends EventTarget implements PlayerHandle {
     this.viewer.getRenderer()?.pause();
     this.viewer.getSink()?.pause();
     this.viewer.setAudioSuspended(true);
+    // Suspend decode as well, but only once frames are established: before
+    // the first frame, onFirstFrame() must still fire (it resolves connect()
+    // and flips a pre-first-frame pause back to playing).
+    if (this._readyState >= 2) this.viewer.setDecodeSuspended(true);
     this.stopTimeupdate();
     this.emit('pause');
   }

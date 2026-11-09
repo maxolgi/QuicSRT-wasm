@@ -11,6 +11,9 @@ export interface VideoStats {
   decodedCount: number;
   decodeFps: number;
   droppedFrames: number;
+  /** Access units dropped while decode was suspended (player pause),
+   * including the post-resume wait for the next keyframe. */
+  droppedWhileSuspended: number;
   hwAcceleration: string | undefined;
   hwModePreference: 'no-preference' | 'prefer-hardware' | 'prefer-software';
   reconfigureCount: number;
@@ -26,6 +29,8 @@ export interface AudioStats {
   decodeQueueSize: number;
   packetsDecoded: number;
   droppedPackets: number;
+  /** Packets dropped while decode was suspended (player pause). */
+  droppedWhileSuspended: number;
   sampleRate: number;
   channels: number;
   outputMode: 'MediaStreamTrackGenerator' | 'AudioWorklet' | null;
