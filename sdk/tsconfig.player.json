@@ -1,4 +1,6 @@
-// Declaration emit for the @quicsrt/player package (build.sh sdk).
+// Declaration emit for the @quicsrt/player package (build.sh sdk). The
+// element entry (element.ts pulls source.ts in via its imports) adds
+// types/element.d.ts + types/source.d.ts for the './element' export.
 // noCheck: the vendored sources under page/vendor predate this tsconfig and
 // are not type-clean under tsc (the page bundles ship via esbuild, which
 // only strips types); the declaration emit itself is structural and needs
@@ -19,5 +21,8 @@
     "skipLibCheck": true,
     "allowJs": false
   },
-  "files": ["../page/vendor/player/index.ts"]
+  "files": [
+    "../page/vendor/player/index.ts",
+    "../page/vendor/element.ts"
+  ]
 }

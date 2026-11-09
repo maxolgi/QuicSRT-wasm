@@ -38,6 +38,35 @@ events (`loadstart`, `loadedmetadata`, `canplay`, `playing`, `timeupdate`,
 connected, `buffered`/`seekable` stay empty, `currentTime` is a 0-based
 per-connection media clock.
 
+## Web component
+
+`import '@quicsrt/player/element'` registers the chrome-free
+`<quicsrt-video>` custom element: it creates (or adopts a direct-child)
+`<video>`, resolves its `src` like the video.js tech does, and
+re-dispatches the player's media events on itself — importing the module
+is the whole setup:
+
+```html
+<quicsrt-video src="quicsrt://gw.example.net:4435/browsertest"
+               controls muted autoplay style="max-width:960px"></quicsrt-video>
+
+<script src="/cert-hash.js"></script>
+<script type="module">
+  import '@quicsrt/player/element';
+</script>
+```
+
+`src` takes `quicsrt://host:port[/stream][?token=..&latency=..]` or an
+`https://…/wt?stream=..` URL; changing it (or `stream`/`token`/`worker-url`)
+remounts the pipeline. Other attributes: `muted` (absent also starts muted
+— autoplay-safe; `muted="false"` opts out), `autoplay`, `controls` (native
+video controls), `latency` (TSBPD ms), `worker-url` (worker override). The
+element exposes `play()`/`pause()`, `paused`/`currentTime`/`duration`/
+`volume`, the media event set (plus `resize {width,height}`, `qualitychange
+{from,to,auto}`, `error {message}`), and `el.player` — the `PlayerHandle` —
+for the full SDK surface. Hosts serving the worker somewhere else call the
+also-exported `setDefaultWorkerUrl(url)` before playback starts.
+
 ## Requirements & gotchas
 
 - **Certificate hash.** For self-signed gateways the WebTransport connection

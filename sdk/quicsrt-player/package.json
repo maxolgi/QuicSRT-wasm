@@ -10,10 +10,16 @@
     ".": {
       "types": "./types/player/index.d.ts",
       "import": "./index.js"
+    },
+    "./element": {
+      "types": "./types/element.d.ts",
+      "import": "./element.js"
     }
   },
   "files": [
     "index.js",
+    "element.js",
+    "chunk-*.js",
     "worker.js",
     "build/",
     "types/",
@@ -31,7 +37,9 @@
   "engines": {
     "node": ">=18"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "./element.js"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/maxolgi/QuicSRT-wasm.git"

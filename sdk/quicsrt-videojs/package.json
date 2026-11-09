@@ -29,7 +29,9 @@
   "engines": {
     "node": ">=18"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "./index.js"
+  ],
   "peerDependencies": {
     "video.js": "^8.0.0",
     "@quicsrt/player": "0.1.0"

@@ -20,9 +20,10 @@ Commands:
              needs ./build.sh engine first
     sdk      Assemble the publishable npm packages from the vendored player
              SDK into sdk-dist/ (sdk/ holds the package templates):
-             @quicsrt/player (SDK entry + prebuilt worker + engine + d.ts)
-             and @quicsrt/videojs (tech adapter; video.js and the player
-             stay peer-external); gated by node sdk/smoke.mjs;
+             @quicsrt/player (SDK entry + the <quicsrt-video> element
+             entry, one shared SDK chunk + prebuilt worker + engine +
+             d.ts) and @quicsrt/videojs (tech adapter; video.js and the
+             player stay peer-external); gated by node sdk/smoke.mjs;
              needs ./build.sh engine first
     deploy   Assemble the self-contained dist/ tree the supervised gateway
              serves as web_root: page html + page/bundle + the engine module
@@ -139,14 +140,19 @@ case "${1:-}" in
             sdk-dist/quicsrt-player/
         cp sdk/quicsrt-videojs/package.json sdk/quicsrt-videojs/README.md sdk/quicsrt-videojs/CHANGELOG.md \
             sdk-dist/quicsrt-videojs/
-        # index.js: the SDK entry. The worker is NOT inlined here - the SDK's
-        # default workerUrl resolves ./worker.js beside this output (the
-        # new URL('./worker.js', import.meta.url) in viewer.ts survives
-        # esbuild untouched), so the worker ships as a sibling entry and
-        # worker.ts never enters this bundle (player + viewer import its
-        # types only).
-        "$ESBUILD" page/vendor/player/index.ts --bundle --format=esm --target=es2022 \
-            --outfile=sdk-dist/quicsrt-player/index.js
+        # index.js + element.js: the SDK entry and the self-registering
+        # <quicsrt-video> entry (page/vendor/element.ts) in ONE esbuild
+        # --splitting run, the page build's recipe - the SDK graph both
+        # import lands in one shared chunk-*.js, so the package carries it
+        # once and embedders using both entries load it once. The worker is
+        # NOT inlined into any of them: the default workerUrl's
+        # new URL('./worker.js', import.meta.url) in viewer.ts resolves
+        # relative to the file it was bundled into, so every emitted module
+        # must sit at the package ROOT beside the worker (the smoke gate
+        # pins that placement; worker.ts never enters the bundles - player
+        # + viewer import its types only).
+        "$ESBUILD" page/vendor/player/index.ts page/vendor/element.ts --bundle --format=esm --target=es2022 --splitting \
+            --outdir=sdk-dist/quicsrt-player --entry-names='[name]' --chunk-names='chunk-[name]-[hash]'
         # worker.js: the page worker recipe (the emcc module stays external -
         # it must be served as its own file because it spawns its pthread
         # workers by self-importing srt_engine.mjs and fetches the .wasm
