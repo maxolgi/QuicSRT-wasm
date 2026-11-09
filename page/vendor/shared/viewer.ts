@@ -105,9 +105,10 @@ export interface ViewerConfig {
   /** When true (default), auto-reconnect with exponential backoff on disconnect.
    *  Set to false for apps that manage their own reconnection lifecycle. */
   autoReconnect?: boolean;
-  /** Override the worker script URL. Defaults to the vite-resolved
-   *  '../worker.ts'. Set this when embedding outside Vite (point it at
-   *  your bundled worker output, e.g. '/vendor/worker.js'). */
+  /** Override the worker script URL. Defaults to the asset-relative
+   *  './worker.js' beside the SDK module (npm package / CDN); bundlers
+   *  resolve it as an asset reference. Set this to point at your own
+   *  worker output (e.g. '/bundle/worker.js') when serving it yourself. */
   workerUrl?: string;
   /** Full WebTransport endpoint URL (e.g. 'https://host:4433/wt'). When set,
    *  overrides host/port/stream/token construction. Stream name and token
@@ -512,7 +513,10 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
       if (workerUrl) {
         worker = new Worker(workerUrl, { type: 'module' });
       } else {
-        worker = new Worker(new URL('../worker.ts', import.meta.url), { type: 'module' });
+        // Asset-relative default: resolves the packaged worker that ships
+        // beside this module (npm package / CDN). Bundlers recognize
+        // new URL(..., import.meta.url) as an asset reference.
+        worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
       }
       worker.onmessage = (e: MessageEvent) => handleWorkerMsg(e.data as WorkerMsg);
       worker.onerror = (e) => {
