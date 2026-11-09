@@ -6,7 +6,7 @@
 // (page/bundle/worker.js, which runs the engine via js/srt_engine.js).
 
 import { mountPlayer } from './vendor/player/index';
-import type { PlayerState, PlayerStatsDetail } from './vendor/player/index';
+import type { PlayerState, PlayerStatsDetail, PlayerQualityChangeDetail } from './vendor/player/index';
 import { createAbr } from './vendor/abr';
 
 const canvas = document.getElementById('video-canvas') as HTMLCanvasElement;
@@ -46,6 +46,12 @@ const videoEl = document.getElementById('video-el') as HTMLVideoElement | null;
 const sinkParam = new URLSearchParams(location.search).get('sink');
 const sinkMode = sinkParam !== 'canvas' && !!videoEl;
 
+// ?abr=sdk: run rendition switching on the SDK player's built-in ladder
+// (setRungs/qualityLevels/'qualitychange') instead of the page machinery
+// below. SDK switches are serial setStream reconnects, so a single player
+// mounts — no hidden overlap joiner (canvas B keeps its CSS-hidden default).
+const sdkAbr = new URLSearchParams(location.search).get('abr') === 'sdk';
+
 // --- Pacing persistence (render ON / decode OFF by default, as in advanced.tsx) ---
 const savedRenderPacing = localStorage.getItem('quicsrt-pacing-render') !== '0';
 const savedDecodePacing = localStorage.getItem('quicsrt-pacing-decode') === '1';
@@ -75,7 +81,9 @@ const mountOpts = {
 };
 const players = sinkMode
   ? [mountPlayer(null, { ...mountOpts, video: videoEl! })]
-  : [mountPlayer(canvas, mountOpts), mountPlayer(canvasB, mountOpts)];
+  : sdkAbr
+    ? [mountPlayer(canvas, mountOpts)]
+    : [mountPlayer(canvas, mountOpts), mountPlayer(canvasB, mountOpts)];
 const canvases = [canvas, canvasB];
 // The active player owns the visible canvas; an overlap swap flips this.
 let activeIdx = 0;
@@ -233,6 +241,38 @@ document.addEventListener('keydown', (e) => {
 });
 syncQualityBtn();
 
+// --- ?abr=sdk: dropdown wired to the SDK's quality-level list ---
+// Arm the ladder; switching (serial setStream reconnects), the ABR engine,
+// watchdog reverts and benching are all SDK-internal. The dropdown drives
+// qualityLevels().selectedIndex ('auto' → -1, source → 0, a rung → its
+// index); list 'change' events drive the display — while auto owns the
+// ladder the select stays on 'auto' with the live rung moving underneath,
+// mirroring the page engine below. The page's own switch machinery never
+// engages in this mode: its listener registrations below are gated on
+// !sdkAbr.
+function setupSdkAbr(): void {
+  const p = players[0];
+  p.setRungs(ladder.slice(1));
+  // The SDK side cannot read ?stream= (the viewer resolves it at connect
+  // time); name the base so rung targets can be built from it.
+  p.setStream(baseStream);
+  const levels = p.qualityLevels();
+
+  qualitySel.addEventListener('change', () => {
+    const v = qualitySel.value;
+    levels.selectedIndex = v === 'auto' ? -1 : Array.from(levels).findIndex((l) => l?.id === v);
+  });
+  levels.addEventListener('change', () => {
+    const i = levels.selectedIndex;
+    setQualitySel(i === -1 ? 'auto' : levels[i]!.id);
+  });
+  p.addEventListener('qualitychange', (ev) => {
+    const { from, to, auto } = (ev as CustomEvent<PlayerQualityChangeDetail>).detail;
+    console.info('abr: sdk switch %s -> %s (%s)', from, to, auto ? 'auto' : 'manual');
+  });
+}
+if (sdkAbr) setupSdkAbr();
+
 // '' (source) maps to the base stream itself.
 function streamFor(value: string) {
   return value === '' ? baseStream : `${baseStream}_${value}`;
@@ -337,7 +377,7 @@ function abortOverlap() {
   if (autoMode) setQualitySel('auto');
 }
 
-qualitySel.addEventListener('change', () => {
+if (!sdkAbr) qualitySel.addEventListener('change', () => {
   // User picks rule the mode: 'auto' engages the engine, any rung parks
   // it. Engine switches and the reverts below dispatch/ride plain
   // writes with userPick unset — neither flips it.
@@ -378,7 +418,7 @@ function commitPlaying() {
 // Attached to BOTH players, gated to the active one: while an overlap is
 // pending the pre-join owns confirmation, so even the active player's own
 // reconnect-'playing' must not commit the unconfirmed selection.
-for (const p of players) {
+if (!sdkAbr) for (const p of players) {
   p.addEventListener('playing', () => {
     if (p !== players[activeIdx] || pending) return;
     commitPlaying();
@@ -444,7 +484,7 @@ function stepRung(delta: number) {
 // rung. Active player only, and none while an overlap is pending — one
 // pre-join at a time (the engine re-baselines on the post-pause tick
 // gap, and the swap's commitPlaying resets it on engine-led switches).
-for (const p of players) {
+if (!sdkAbr) for (const p of players) {
   p.addEventListener('stats', (ev) => {
     if (p !== players[activeIdx] || !autoMode || pending) return;
     const { rxData, rxLoss, rxDropped } =
