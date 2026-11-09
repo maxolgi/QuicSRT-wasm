@@ -29,9 +29,12 @@
 export class CanvasRenderer {
   private static readonly RING_CAP = 8;
   // Drop head frame if its PTS is more than this many µs behind the
-  // presentation clock — it missed its slot. ~3 RAF cycles at 60 Hz;
-  // absorbs jitter without accumulating latency.
-  private static readonly LATE_DROP_US = 50_000;
+  // presentation clock — it missed its slot. Wide enough to absorb
+  // decoder/network delivery bursts (~4 frames at 30 fps): a bunched
+  // presentation is imperceptible where a skip reads as a visible
+  // stutter. Higher values trade burst absorption for catch-up latency,
+  // bounded by this threshold; real stalls still snap to the newest frame.
+  private static readonly LATE_DROP_US = 150_000;
   // Reset the PTS↔wall clock mapping when a frame's PTS diverges from the
   // expected presentation time by more than this — indicates seek,
   // stream restart, or recovery from a backgrounded tab.
