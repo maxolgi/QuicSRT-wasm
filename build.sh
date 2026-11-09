@@ -13,8 +13,8 @@ Commands:
     engine   Build the M3 JS engine wrapper module (build/srt_engine.mjs,
              driven through js/srt_engine.js; gate: node js/test_contract.mjs)
     page     Bundle the M3 player page + M6 publisher page + the 1:1 call
-             page + the video.js demo page
-             (page/bundle/{main,publish,call,videojs,worker,publish_worker}.js
+             page + the video.js demo page + the <quicsrt-video> demo page
+             (page/bundle/{main,publish,call,videojs,element,worker,publish_worker}.js
              plus the shared/lazy chunk-* files and videojs.css) with the
              local esbuild (package.json - npm install);
              needs ./build.sh engine first
@@ -102,10 +102,11 @@ case "${1:-}" in
         # the emcc module.
         "$ESBUILD" page/vendor/stream-worker.ts --bundle --format=esm \
             --external:../build/srt_engine.mjs --outfile=page/bundle/publish_worker.js
-        # Player + publisher + call + videojs-demo entries in ONE esbuild
-        # run with --splitting: emits page/bundle/main.js +
+        # Player + publisher + call + videojs-demo + element-demo entries
+        # in ONE esbuild run with --splitting: emits page/bundle/main.js +
         # page/bundle/publish.js + page/bundle/call.js +
-        # page/bundle/videojs.js (--entry-names=[name]) plus
+        # page/bundle/videojs.js + page/bundle/element.js
+        # (--entry-names=[name]) plus
         # chunk-[name]-[hash] files for shared and lazily-imported code -
         # notably the Preact debug panel (preact/chart.js, eruda behind its
         # own dynamic import in ConsoleTab). main.ts dynamic-imports the
@@ -116,7 +117,7 @@ case "${1:-}" in
         # page/bundle/videojs.css next to it (linked from videojs.html).
         # Deploy copies page/bundle/* wholesale, so every chunk (and that
         # css) rides along.
-        "$ESBUILD" page/main.ts page/publish.tsx page/call.tsx page/videojs.ts --bundle --format=esm --splitting \
+        "$ESBUILD" page/main.ts page/publish.tsx page/call.tsx page/videojs.ts page/element.ts --bundle --format=esm --splitting \
             --outdir=page/bundle --entry-names='[name]' --chunk-names='chunk-[name]-[hash]' \
             --jsx=automatic --jsx-import-source=preact
         ;;

@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- <quicsrt-video> demo page for the component (page/vendor/element):
+     the chrome-free web component playing a QuicSRT source — no custom
+     controls beyond the native video ones, just this heading and the
+     status line. Source params match the viewer page (?stream=, ?host=/
+     ?port= with window.WT_PORT from /cert-hash.js, ?token=, ?latency=;
+     ?wt=<full WT url> to pass an endpoint through). The module entry is
+     the esbuild bundle /bundle/element.js (the component ships its own
+     inline sizing styles — no CSS sidecar). Served by the QuicSRT-gateway
+     from dist/ (./build.sh deploy; COOP/COEP on every response: the emcc
+     engine uses pthreads, which need a cross-origin-isolated context). -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/quicsrt.png" />
+    <title>QuicSRT-wasm &lt;quicsrt-video&gt;</title>
+    <style>
+      body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #111;
+        color: #ddd;
+        margin: 0;
+        padding: 1.5rem;
+      }
+      h1 { font-size: 1.1rem; }
+      #stage { width: min(100%, 960px); }
+      #status { margin-top: 8px; font-size: 12px; color: #999; word-break: break-all; }
+    </style>
+  </head>
+  <body>
+    <h1>QuicSRT via &lt;quicsrt-video&gt;</h1>
+    <div id="stage">
+      <quicsrt-video src="quicsrt://127.0.0.1:4435/browsertest" controls muted autoplay style="max-width:960px"></quicsrt-video>
+    </div>
+    <p id="status"></p>
+    <script src="/cert-hash.js"></script>
+    <script type="module" src="/bundle/element.js"></script>
+  </body>
+</html>

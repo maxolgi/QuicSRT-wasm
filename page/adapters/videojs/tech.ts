@@ -8,12 +8,9 @@
 // duration is Infinity once connected, buffered/seekable stay empty and
 // playbackRate is fixed at 1.
 //
-// Sources:
-//   quicsrt://host:port[/stream][?token=..&latency=..]
-//       → SDK url https://host:port/wt?stream=<stream>&token=.. (stream
-//         defaults to "default", latency maps to latencyMs clamped 20..8000)
-//   https://host:port/wt?stream=..&token=..&latency=.. (type application/quicsrt)
-//       → passed through as the SDK url option, stream/latency read from query
+// Sources are resolved by the shared resolver (page/vendor/source.ts):
+// quicsrt://host:port[/stream][?token&latency] and https /wt URLs → the
+// SDK url/stream/token/latencyMs options.
 //
 // Tech options live under the player's `quicsrt` key (video.js namespaces
 // tech options by tech name): workerUrl, certHash, latencyMs, hwMode, ….
@@ -25,6 +22,8 @@ import type TechBase from 'video.js/dist/types/tech/tech';
 
 import { mountPlayer } from '../../vendor/player/index';
 import type { PlayerHandle, PlayerOptions } from '../../vendor/player/index';
+import { resolveSource } from '../../vendor/source';
+import type { ResolvedSource } from '../../vendor/source';
 
 const Tech = videojs.getTech('Tech') as unknown as typeof TechBase;
 
@@ -41,56 +40,6 @@ interface TechInitOptions {
   techId?: string;
   /** Tech-specific options: the player's `quicsrt` option object. */
   quicsrt?: PlayerOptions;
-}
-
-interface ResolvedSource {
-  /** Full WebTransport endpoint (the SDK `url` option). */
-  url: string;
-  /** Stream name resolved from the source. */
-  stream: string;
-  /** Connection identity minus the stream name: url origin + path. */
-  endpoint: string;
-  token: string | null;
-  latencyMs: number | undefined;
-}
-
-const MIN_LATENCY_MS = 20;
-const MAX_LATENCY_MS = 8000;
-
-function clampLatencyMs(value: number): number {
-  return Math.min(MAX_LATENCY_MS, Math.max(MIN_LATENCY_MS, value));
-}
-
-function resolveSource(src: string): ResolvedSource | null {
-  let u: URL;
-  try {
-    u = new URL(src);
-  } catch {
-    return null;
-  }
-  const token = u.searchParams.get('token');
-  const latencyRaw = u.searchParams.get('latency');
-  const latencyMs = latencyRaw !== null && Number.isFinite(+latencyRaw)
-    ? clampLatencyMs(+latencyRaw)
-    : undefined;
-
-  if (u.protocol === 'quicsrt:') {
-    const stream = decodeURIComponent(u.pathname.replace(/^\/+/, '').split('/')[0] || '') || 'default';
-    const wt = new URL(`https://${u.host}/wt`);
-    wt.searchParams.set('stream', stream);
-    if (token !== null) wt.searchParams.set('token', token);
-    return { url: wt.href, stream, endpoint: `https://${u.host}/wt`, token, latencyMs };
-  }
-  if (u.protocol === 'https:' || u.protocol === 'http:') {
-    return {
-      url: u.href,
-      stream: u.searchParams.get('stream') || 'default',
-      endpoint: u.origin + u.pathname,
-      token,
-      latencyMs,
-    };
-  }
-  return null;
 }
 
 // Live streams expose no buffer windows; the pre-mount surface reports the
