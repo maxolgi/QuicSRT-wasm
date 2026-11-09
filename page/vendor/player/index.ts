@@ -13,9 +13,9 @@
 //   volume (real, 0..1 clamped) and setMuted both emit 'volumechange'.
 //   duration is 0 before the first connect, Infinity after ('durationchange').
 //   currentTime is a 0-based per-connection media clock from the renderer
-//     PTS: frozen while paused, reset by every connection (a reconnect
-//     starts a new clock), 0 with no renderer (decodeInWorker without a
-//     canvas) or before the first frame.
+//     (or video-sink) PTS: frozen while paused, reset by every connection (a
+//     reconnect starts a new clock), 0 with no renderer or sink
+//     (decodeInWorker without a canvas) or before the first frame.
 //   buffered/seekable are always empty; playbackRate is fixed at 1 (setter
 //     is a documented no-op) — live streams don't seek or trick-play.
 //   Extra media events: play, pause, timeupdate (~4 Hz while frames flow),
@@ -25,6 +25,7 @@
 import { createViewer } from '../shared/viewer';
 import type { ViewerHandle, ConnectionState } from '../shared/viewer';
 import type { CanvasRenderer } from '../render';
+import type { VideoSink } from '../video-sink';
 import type { VideoPipeline, OpusAudioPipeline, AacAudioPipeline } from '../decode';
 import type { StatsMsg, DemuxStatsMsg } from '../worker';
 
@@ -62,6 +63,11 @@ export interface PlayerOptions {
   workerUrl?: string;
   /** Full WebTransport endpoint URL. Overrides host/port/stream/token. */
   url?: string;
+  /** <video> element output (opt-in). Decoded frames are written to a video
+   *  MediaStreamTrackGenerator and played by the element; audio rides the
+   *  same MediaStream (no hidden <audio>). Takes precedence over the canvas
+   *  argument; falls back to canvas with a console.warn when unsupported. */
+  video?: HTMLVideoElement;
   /** Direct pcm consumer port or factory — raw pcm messages flow straight
    *  from the receiver worker to this port (control stays on the parent
    *  channel). Pass a factory when autoReconnect is on; the worker is
@@ -123,11 +129,12 @@ export interface PlayerHandle extends EventTarget {
   /** Live duration: 0 before the first connect, Infinity once connected
    *  ('durationchange' fires on the transition). */
   readonly duration: number;
-  /** 0-based session media clock (seconds) from the renderer PTS — the
-   *  first presented frame of the current connection is 0. Frozen while
-   *  paused (the renderer freezes its clock); reset by every fresh
-   *  connection — a reconnect starts a new session clock. Reads 0 with no
-   *  renderer (decodeInWorker without a canvas) or before the first frame. */
+  /** 0-based session media clock (seconds) from the renderer (or video-sink)
+   *  PTS — the first presented frame of the current connection is 0. Frozen
+   *  while paused (the renderer/sink freeze their clocks); reset by every
+   *  fresh connection — a reconnect starts a new session clock. Reads 0 with
+   *  no renderer or sink (decodeInWorker without a canvas) or before the
+   *  first frame. */
   readonly currentTime: number;
   /** Always empty — live buffer windows are not exposed. */
   readonly buffered: TimeRanges;
@@ -143,6 +150,7 @@ export interface PlayerHandle extends EventTarget {
   setRenderPacing(enabled: boolean): void;
   setDecodePacing(enabled: boolean): void;
   getRenderer(): CanvasRenderer | null;
+  getSink(): VideoSink | null;
   getVideo(): VideoPipeline | null;
   getAudio(): OpusAudioPipeline | AacAudioPipeline | null;
   getWorker(): Worker | null;
@@ -201,6 +209,7 @@ class Player extends EventTarget implements PlayerHandle {
 
     this.viewer = createViewer({
       canvas: canvas ?? undefined,
+      video: opts.video,
       host: opts.host,
       port: opts.port,
       stream: opts.stream,
@@ -343,12 +352,13 @@ class Player extends EventTarget implements PlayerHandle {
     // presented frame of THIS connection is the currentTime anchor. (In
     // decodeInWorker mode this runs before the first draw — the anchor is
     // then captured lazily at the first currentTime read.)
-    this._ptsAnchorUs = this.viewer.getRenderer()?.currentPtsUs() ?? null;
+    this._ptsAnchorUs = this.viewer.getRenderer()?.currentPtsUs() ?? this.viewer.getSink()?.currentPtsUs() ?? null;
     if (this._paused && hadFrames) {
-      // Pause survives reconnects: the fresh renderer defaults to live —
-      // re-freeze it. Audio suspension persists via the viewer's suspend
+      // Pause survives reconnects: the fresh renderer/sink default to live —
+      // re-freeze them. Audio suspension persists via the viewer's suspend
       // pref (re-applied at sink creation), no action needed here.
       this.viewer.getRenderer()?.pause();
+      this.viewer.getSink()?.pause();
     } else {
       // Frames render → not paused (a connect()-only host never looks paused).
       this._paused = false;
@@ -448,6 +458,7 @@ class Player extends EventTarget implements PlayerHandle {
       // so resolve immediately after emitting play → playing.
       this._paused = false;
       this.viewer.getRenderer()?.resume();
+      this.viewer.getSink()?.resume();
       this.viewer.setAudioSuspended(false);
       this.emit('play');
       this.startTimeupdate();
@@ -467,6 +478,7 @@ class Player extends EventTarget implements PlayerHandle {
     // Freeze the canvas on the last frame; suspend the audio element and
     // the PCM AudioContext (the suspend pref persists across reconnects).
     this.viewer.getRenderer()?.pause();
+    this.viewer.getSink()?.pause();
     this.viewer.setAudioSuspended(true);
     this.stopTimeupdate();
     this.emit('pause');
@@ -491,7 +503,7 @@ class Player extends EventTarget implements PlayerHandle {
   get videoHeight(): number { return this._videoHeight; }
   get duration(): number { return this._duration; }
   get currentTime(): number {
-    const pts = this.viewer.getRenderer()?.currentPtsUs() ?? null;
+    const pts = this.viewer.getRenderer()?.currentPtsUs() ?? this.viewer.getSink()?.currentPtsUs() ?? null;
     if (pts === null) return 0;
     // decodeInWorker reaches onFirstFrame before the first draw — anchor
     // lazily at the first observed PTS in that case.
@@ -529,6 +541,7 @@ class Player extends EventTarget implements PlayerHandle {
   }
 
   getRenderer(): CanvasRenderer | null { return this.viewer.getRenderer(); }
+  getSink(): VideoSink | null { return this.viewer.getSink(); }
   getVideo(): VideoPipeline | null { return this.viewer.getVideo(); }
   getAudio(): OpusAudioPipeline | AacAudioPipeline | null { return this.viewer.getAudio(); }
   getWorker(): Worker | null { return this.viewer.getWorker(); }

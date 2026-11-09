@@ -64,6 +64,17 @@ export interface RenderStats {
   arrivalHistogram: number[];
 }
 
+// <video>-element sink stats. A deliberately minimal subset of RenderStats:
+// the sink keeps no presentation ring, so the ring/pacing/arrival fields do
+// not apply.
+export interface VideoSinkStats {
+  frameCount: number;
+  droppedWhilePaused: number;
+  currentPtsUs: number | null;
+  width: number;
+  height: number;
+}
+
 // Mirrors the WASM `DebugSnapshot` (crates/mpeg2ts-wasm/src/lib.rs).
 // Every typed array is a fresh JS-owned copy; the snapshot struct is GC'd.
 // Per-PID arrays are parallel to `pids`; `scramblingCounts`/`afControlCounts`
