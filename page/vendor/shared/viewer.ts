@@ -36,7 +36,8 @@ export interface ViewerUi {
   /** Called after the `init` message is posted to a (fresh or reused) worker.
     *  Useful for posting follow-up commands like `debug-rate`. */
   onWorkerReady?(worker: Worker): void;
-  /** Decoded video frame (decodeInWorker mode only). Host owns lifecycle — must call frame.close(). */
+  /** Decoded video frame (decodeInWorker mode, or any sinkless joiner — see
+   *  ViewerConfig.joiner). Host owns lifecycle — must call frame.close(). */
   onDecodedFrame?(frame: VideoFrame): void;
   /** Decoded audio data (decodeInWorker mode only). Host owns lifecycle — must call data.close(). */
   onDecodedAudio?(data: AudioData): void;
@@ -114,6 +115,13 @@ export interface ViewerConfig {
    *  overrides host/port/stream/token construction. Stream name and token
    *  are appended as query params if not already present in the URL. */
   url?: string;
+  /** Sinkless connection for seamless rung switching: when true, connect
+   *  builds no output — no VideoSink, no renderer, no <audio> element, no
+   *  element play()/muted. Video frames surface via ui.onDecodedFrame (host
+   *  MUST close() them); audio/PCM is dropped closed at the message
+   *  boundary. onFirstFrame still fires; attachOutput() swaps the surface
+   *  in, after which (reconnects included) the viewer behaves normally. */
+  joiner?: boolean;
   /** Direct pcm consumer port (or a factory for one). When provided, raw pcm
    *  messages (with schedUs/relUs release telemetry) flow directly from the
    *  receiver worker to this port instead of the parent postMessage channel;
@@ -156,6 +164,13 @@ export interface ViewerHandle {
    *  across reconnects. Internal — the Player layer drives it from
    *  play()/pause(). */
   setDecodeSuspended(suspended: boolean): void;
+  /** Late-attach the output surface (joiner mode only): constructs the
+   *  VideoSink on the configured <video> (or CanvasRenderer on the canvas
+   *  when no video element was given), applies persisted element state,
+   *  and feeds decoded frames to it from then on instead of
+   *  ui.onDecodedFrame. Idempotent; no-op with a console.warn outside
+   *  joiner mode, with no active connection, or with no output configured. */
+  attachOutput(): void;
   /** Tab visibility changed (drives worker visibility message). */
   onVisibilityChange(visible: boolean): void;
   /** Get the current video pipeline (or null). */
@@ -191,6 +206,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     decodeInWorker = false,
     hwMode,
     workerAudio = false,
+    joiner = false,
     autoReconnect = true,
     workerUrl,
     url: configUrl,
@@ -252,6 +268,10 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
   // per connection, and worker-decoded frames are gated at the message
   // boundary.
   let decodeSuspendedPref = false;
+  // Joiner output latch: a joiner connects sinkless until its first
+  // attachOutput(); from then on (reconnects included) it is a normal
+  // viewer.
+  let outputAttached = false;
 
   function log(msg: string, cls = '') {
     ui.log(msg, cls);
@@ -264,6 +284,13 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
   function setConnState(s: ConnectionState) {
     connState = s;
     ui.onStateChange(s);
+  }
+
+  // True while a joiner connection has no output surface yet: every
+  // per-connect creation path and the worker message boundary consults
+  // this.
+  function sinkless() {
+    return joiner && !outputAttached;
   }
 
   const audioCb = {
@@ -448,19 +475,32 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     ui.onCertMode?.(hashHex ? 'self' : 'mkcert');
 
     firstFrame = true;
-    if (videoSinkMode) {
+    if (videoSinkMode && !sinkless()) {
       // Video-element output replaces the canvas renderer in both decode
-      // paths: decoded frames go to the sink's generator track.
+      // paths: decoded frames go to the sink's generator track. A sinkless
+      // joiner defers this to attachOutput().
       videoSink = new VideoSink(videoEl!);
       startVideoEl();
     }
     if (!decodeInWorker) {
       // The guard above guarantees a canvas whenever !decodeInWorker and no
       // video element is active; TS cannot carry that relational narrowing,
-      // hence the assertion.
-      if (!videoSinkMode) renderer = new CanvasRenderer(canvas!);
+      // hence the assertion. A sinkless joiner defers the renderer to
+      // attachOutput().
+      if (!videoSinkMode && !sinkless()) renderer = new CanvasRenderer(canvas!);
       video = new VideoPipeline({
         onFrame: (frame) => {
+          // Sinkless joiner: no surface owns the frame. Dims first — the
+          // host callback may close() it — then ownership passes to the
+          // host, as the worker 'videoFrame' boundary does.
+          if (sinkless()) {
+            if (firstFrame) {
+              firstFrame = false;
+              ui.onFirstFrame(frame.displayWidth, frame.displayHeight);
+            }
+            ui.onDecodedFrame?.(frame);
+            return;
+          }
           if (videoSink) videoSink.feed(frame);
           else renderer?.draw(frame);
           if (firstFrame) {
@@ -477,7 +517,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
       // Worker-decode mode: no main-side pipeline. With a canvas the
       // transferred frames render locally (renderer owns the frames);
       // without one they go raw to the host via ui.onDecodedFrame.
-      if (canvas && !videoSinkMode) {
+      if (canvas && !videoSinkMode && !sinkless()) {
         renderer = new CanvasRenderer(canvas!);
       }
     }
@@ -569,7 +609,10 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
           if (msg.videoPid >= 0) {
             video?.setCodecHint(msg.videoCodec);
           }
-          if (msg.audioPid >= 0 && msg.audioStreamType >= 0 && !audio) {
+          if (msg.audioPid >= 0 && msg.audioStreamType >= 0 && !audio && !sinkless()) {
+            // A sinkless joiner builds no audio pipeline (audioPes then
+            // drops at the boundary); PMTs repeat, so one still appears
+            // after a mid-session attachOutput().
             const isOpus = msg.audioStreamType === 0x06;
             log(`audio PID ${msg.audioPid}: ${isOpus ? 'Opus' : 'AAC'} (stream type 0x${msg.audioStreamType.toString(16)})`, 'info');
             audio = isOpus
@@ -599,6 +642,12 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
         if (decodeSuspendedPref) {
           // Decode suspended (paused): release worker-decoded audio before
           // the sink path (which would otherwise also create it lazily).
+          msg.data.close();
+          break;
+        }
+        if (sinkless()) {
+          // Sinkless joiner: no audio sinks exist — release the data at
+          // the boundary.
           msg.data.close();
           break;
         }
@@ -649,6 +698,9 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
         audio?.feed(msg.data, msg.pts);
         break;
       case 'pcm': {
+        // Sinkless joiner: no PcmPlayer — drop at the boundary. The next
+        // message after attachOutput() builds it (lazy creation below).
+        if (sinkless()) break;
         if (activePcmPid === null) {
           activePcmPid = msg.pid;
           log(`PCM active PID ${msg.pid}: ${msg.channelCount}ch SMPTE 302M`, 'info');
@@ -703,6 +755,31 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     manualDisconnect = true;
     reconnectAttempts = 0;
     teardown();
+  }
+
+  // Late output attach (joiner mode): build the surface the connect path
+  // skipped. Reassigning srcObject is intended — the caller is retiring
+  // the session that owned the element.
+  function attachOutput() {
+    if (!joiner) {
+      console.warn('QuicSRT: attachOutput() ignored — viewer is not in joiner mode');
+      return;
+    }
+    if (outputAttached) return;
+    if (connState === 'idle') {
+      console.warn('QuicSRT: attachOutput() ignored — no active connection');
+      return;
+    }
+    if (videoSinkMode) {
+      videoSink = new VideoSink(videoEl!);
+      startVideoEl();
+    } else if (canvas) {
+      renderer = new CanvasRenderer(canvas);
+    } else {
+      console.warn('QuicSRT: attachOutput() ignored — no video element or canvas configured');
+      return;
+    }
+    outputAttached = true;
   }
 
   function setLatencyMs(ms: number) {
@@ -774,6 +851,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     setVolume,
     setAudioSuspended,
     setDecodeSuspended,
+    attachOutput,
     onVisibilityChange(visible: boolean) {
       worker?.postMessage({ cmd: 'visibility', visible });
     },
