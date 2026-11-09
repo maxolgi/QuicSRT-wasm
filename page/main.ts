@@ -13,6 +13,7 @@ const canvas = document.getElementById('video-canvas') as HTMLCanvasElement;
 const canvasB = document.getElementById('video-canvas-b') as HTMLCanvasElement;
 const connectBtn = document.getElementById('connect') as HTMLButtonElement;
 const latencyNum = document.getElementById('latency-num') as HTMLInputElement;
+const playBtn = document.getElementById('play') as HTMLButtonElement;
 const muteBtn = document.getElementById('mute') as HTMLButtonElement;
 const fullscreenBtn = document.getElementById('fullscreen') as HTMLButtonElement;
 const debugToggle = document.getElementById('debug-toggle') as HTMLButtonElement;
@@ -33,6 +34,17 @@ if (decodeParam === 'software' || decodeParam === 'hardware') {
 // render SDK-side onto the canvas below, with worker-decoded audio sunk
 // through the standard <audio>/mute path.
 const workerMode = new URLSearchParams(location.search).get('worker') === '1';
+
+// ?sink=video (default) / ?sink=canvas: output via a <video> element and a
+// video MediaStreamTrackGenerator — GPU-side compositing, and the element's
+// media pipeline keeps presenting regardless of the tab's visibility state.
+// The canvas path (rAF-driven presentation) stays available for A/B and as
+// the automatic fallback where MSTG is unsupported. Single player in sink
+// mode: both players would contend for the one element, so rendition
+// switches go serial, not overlap.
+const videoEl = document.getElementById('video-el') as HTMLVideoElement | null;
+const sinkParam = new URLSearchParams(location.search).get('sink');
+const sinkMode = sinkParam !== 'canvas' && !!videoEl;
 
 // --- Pacing persistence (render ON / decode OFF by default, as in advanced.tsx) ---
 const savedRenderPacing = localStorage.getItem('quicsrt-pacing-render') !== '0';
@@ -61,10 +73,17 @@ const mountOpts = {
       decodeParam === 'hardware' ? 'prefer-hardware' as const : undefined,
   } : {}),
 };
-const players = [mountPlayer(canvas, mountOpts), mountPlayer(canvasB, mountOpts)];
+const players = sinkMode
+  ? [mountPlayer(null, { ...mountOpts, video: videoEl! })]
+  : [mountPlayer(canvas, mountOpts), mountPlayer(canvasB, mountOpts)];
 const canvases = [canvas, canvasB];
 // The active player owns the visible canvas; an overlap swap flips this.
 let activeIdx = 0;
+if (sinkMode) {
+  canvas.style.display = 'none';
+  canvasB.style.display = 'none';
+  videoEl!.style.display = 'block';
+}
 
 // --- Controls ---
 connectBtn.addEventListener('click', () => {
@@ -98,6 +117,14 @@ muteBtn.addEventListener('click', () => {
   const p = players[activeIdx];
   p.setMuted(!p.muted);
   muteBtn.classList.toggle('muted', p.muted);
+});
+
+// Play/pause: pause() freezes the canvas on the last frame and suspends
+// audio; play() resumes at the live edge (auto-connects an idle player).
+playBtn.addEventListener('click', () => {
+  const p = players[activeIdx];
+  if (p.paused) p.play().catch(() => {});
+  else p.pause();
 });
 
 fullscreenBtn.addEventListener('click', () => {
@@ -256,7 +283,7 @@ function armWatchdog() {
 // simulcast all rungs share one timeline, so it overlaps like the rest.)
 function switchTo(value: string) {
   const p = players[activeIdx];
-  if (p.state === 'idle') {
+  if (p.state === 'idle' || players.length === 1) {
     // Nothing is playing: record the name; the next connect() uses it.
     cancelOverlap();
     p.setStream(streamFor(value));
@@ -376,11 +403,15 @@ for (const p of players) {
     // its synchronous 'statechange'→'idle' must land as a non-active
     // event, or it would reset the connect button mid-swap.
     const old = players[activeIdx];
+    // Read BEFORE the disconnect — idle resets the old player's paused to
+    // true — and re-apply below, so a paused session stays paused post-swap.
+    const wasPaused = old.paused;
     canvases[activeIdx].style.display = 'none';
     activeIdx = 1 - activeIdx;
     canvases[activeIdx].style.display = 'block';
     old.disconnect();
     p.setMuted(old.muted);
+    if (wasPaused) p.pause();
     console.info('abr: overlap swap %s -> %s (join %dms)', from, to, ms);
     commitPlaying();
     // The debug panel re-mounts per active player (chart history resets
@@ -443,6 +474,7 @@ for (const p of players) {
     if (s === 'idle') {
       muteBtn.disabled = true;
       muteBtn.classList.add('muted');
+      playBtn.disabled = true;
     }
   });
 
@@ -450,12 +482,53 @@ for (const p of players) {
     if (p !== players[activeIdx]) return;
     muteBtn.disabled = false;
     muteBtn.classList.toggle('muted', p.muted);
+    playBtn.disabled = false;
   });
 
   p.addEventListener('playing', () => {
     if (p !== players[activeIdx]) return;
     muteBtn.disabled = false;
     muteBtn.classList.toggle('muted', p.muted);
+  });
+
+  // Play/pause label follows the active player's playback state; read
+  // p.paused (not the event type) — 'playing' also fires on a reconnect
+  // of a paused session, which stays paused.
+  for (const type of ['play', 'pause', 'playing', 'close', 'ended'] as const) {
+    p.addEventListener(type, () => {
+      if (p !== players[activeIdx]) return;
+      playBtn.textContent = p.paused ? 'play' : 'pause';
+    });
+  }
+}
+
+// --- ?events=1: console trace of the full player event surface ---
+// Debug aid for the media-element API: every event below logged on BOTH
+// players (active + hidden overlap joiner) with a performance.now()
+// timestamp, and the handles exposed as window.__qsrtPlayers for
+// interactive poking (volume, setLatencyMs, play/pause, …). 'audiometer'
+// is left out — ~30 fps spam.
+if (new URLSearchParams(location.search).get('events') === '1') {
+  (window as any).__qsrtPlayers = players;
+  const types = [
+    'loadstart', 'connecting', 'open', 'waiting', 'loadedmetadata', 'canplay',
+    'playing', 'play', 'pause', 'timeupdate', 'volumechange', 'durationchange',
+    'resize', 'stats', 'drift', 'close', 'error', 'ended', 'statechange',
+  ];
+  players.forEach((p, idx) => {
+    for (const type of types) {
+      p.addEventListener(type, (ev) => {
+        console.log(`[p${idx}] ${type}`, {
+          t: performance.now().toFixed(0),
+          paused: p.paused,
+          state: p.state,
+          readyState: p.readyState,
+          currentTime: p.currentTime,
+          videoWidth: p.videoWidth,
+          ...(ev instanceof CustomEvent ? { detail: ev.detail } : {}),
+        });
+      });
+    }
   });
 }
 

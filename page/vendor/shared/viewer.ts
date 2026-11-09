@@ -7,6 +7,7 @@
 import { VideoPipeline, OpusAudioPipeline, AacAudioPipeline } from '../decode';
 import { PcmPlayer } from '../pcm-player';
 import { CanvasRenderer } from '../render';
+import { VideoSink } from '../video-sink';
 import type { WorkerMsg, StatsMsg, DemuxStatsMsg } from '../worker';
 import type { AudioMeterData } from './types';
 
@@ -45,9 +46,18 @@ export interface ViewerUi {
 }
 
 export interface ViewerConfig {
-  /** Canvas element to render into. Required when decodeInWorker is false;
-   *  unused (may be omitted) when decodeInWorker is true. */
+  /** Canvas element to render into. Required when decodeInWorker is false
+   *  and no `video` element is supplied; unused (may be omitted) when
+   *  decodeInWorker is true. */
   canvas?: HTMLCanvasElement;
+  /** Video element output (opt-in). When supplied and the browser supports
+   *  video MediaStreamTrackGenerator, decoded frames are written to a
+   *  generator track and the element plays A+V — the audio track rides the
+   *  same MediaStream (no hidden <audio> is created; PCM audio stays on
+   *  WebAudio). Takes precedence over `canvas`; falls back to canvas with a
+   *  console.warn when unsupported. In decodeInWorker mode frames go to the
+   *  sink instead of the ui.onDecodedFrame callback. */
+  video?: HTMLVideoElement;
   /** Latency input element (millisecond slider/input). Optional for embedders
    *  that drive latency via `setLatencyMs()` instead. */
   latencyInput?: HTMLInputElement;
@@ -131,14 +141,30 @@ export interface ViewerHandle {
   setStream(name: string): void;
   /** Mute or unmute audio. Works without any DOM element. */
   setMuted(muted: boolean): void;
+  /** Set audio volume 0..1 (clamped). Persists across reconnects and applies
+   *  to the <audio> element and the PCM gain node. Internal — the Player
+   *  layer exposes this as media-element `volume`. */
+  setVolume(v: number): void;
+  /** Suspend or resume audio output: <audio> element pause/play + PCM
+   *  AudioContext suspend/resume. Persists across reconnects. Internal —
+   *  the Player layer drives it from play()/pause(). */
+  setAudioSuspended(suspended: boolean): void;
+  /** Suspend or resume the decode path (player pause): pipelines drop
+   *  encoded media before decode (main mode) and worker-decoded frames /
+   *  audio are closed at the message boundary (worker mode). Persists
+   *  across reconnects. Internal — the Player layer drives it from
+   *  play()/pause(). */
+  setDecodeSuspended(suspended: boolean): void;
   /** Tab visibility changed (drives worker visibility message). */
   onVisibilityChange(visible: boolean): void;
   /** Get the current video pipeline (or null). */
   getVideo(): VideoPipeline | null;
   /** Get the current audio pipeline (or null). */
   getAudio(): OpusAudioPipeline | AacAudioPipeline | null;
-  /** Get the current renderer (or null). */
+  /** Get the current renderer (or null — always null in video-element mode). */
   getRenderer(): CanvasRenderer | null;
+  /** Get the current video-element sink (or null — always null in canvas mode). */
+  getSink(): VideoSink | null;
   /** Get the current worker (or null). */
   getWorker(): Worker | null;
   /** True if connected or connecting. */
@@ -148,6 +174,7 @@ export interface ViewerHandle {
 export function createViewer(config: ViewerConfig): ViewerHandle {
   const {
     canvas,
+    video: videoEl,
     latencyInput,
     muteBtn,
     latencyMs: initialLatencyMs,
@@ -168,6 +195,14 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     url: configUrl,
     pcmPort: configPcmPort,
   } = config;
+
+  // Video-element output mode, resolved once. An unsupported browser (or a
+  // missing element) renders to canvas — video output must never break
+  // playback.
+  const videoSinkMode = !!videoEl && VideoSink.supports();
+  if (videoEl && !videoSinkMode) {
+    console.warn('QuicSRT: MediaStreamTrackGenerator video output unsupported — rendering to canvas');
+  }
 
   // Direct pcm channel: normalized to a per-worker factory. A transferred
   // MessagePort dies with the worker, so static ports are single-shot and
@@ -191,6 +226,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
   let pcmPlayer: PcmPlayer | null = null;
   let activePcmPid: number | null = null;
   let renderer: CanvasRenderer | null = null;
+  let videoSink: VideoSink | null = null;
   let audioEl: HTMLAudioElement | null = null;
   let audioReady = false;
   let workerAudioWriter: WritableStreamDefaultWriter<AudioData> | null = null;
@@ -207,6 +243,14 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
   let streamOverride: string | null = null;
   let appliedStream: string | null = null;
   let mutedState = true;
+  // Persisted audio prefs. The sinks (audio element, PCM player) are recreated
+  // per connection, so these are re-applied at each creation site.
+  let volumePref = 1;
+  let audioSuspendedPref = false;
+  // Same persistence for decode suspension: main-mode pipelines are recreated
+  // per connection, and worker-decoded frames are gated at the message
+  // boundary.
+  let decodeSuspendedPref = false;
 
   function log(msg: string, cls = '') {
     ui.log(msg, cls);
@@ -265,6 +309,8 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     activePcmPid = null;
     renderer?.destroy();
     renderer = null;
+    videoSink?.destroy();
+    videoSink = null;
     try { workerAudioWriter?.close(); } catch {}
     workerAudioWriter = null;
     if (audioEl) { try { audioEl.pause(); } catch {} audioEl.srcObject = null; audioEl.remove(); }
@@ -276,7 +322,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
   function startDriftMonitor() {
     if (driftTimer !== null) clearInterval(driftTimer);
     driftTimer = setInterval(() => {
-      const videoPts = renderer?.currentPtsUs() ?? null;
+      const videoPts = renderer?.currentPtsUs() ?? videoSink?.currentPtsUs() ?? null;
       const audioPts = audio?.audioPlayheadUs() ?? null;
       if (videoPts === null || audioPts === null) {
         latestDriftMs = null;
@@ -298,17 +344,54 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     ui.onDrift?.(null);
   }
 
+  // Re-apply persisted audio prefs to the <audio> element. It is recreated
+  // per connection (wireAudio / workerAudio sink), so volume and the suspend
+  // state must be re-applied at each creation site.
+  function applyAudioElPrefs() {
+    if (!audioEl) return;
+    audioEl.volume = volumePref;
+    if (audioSuspendedPref) audioEl.pause();
+  }
+
+  // The element the audio controls (mute/volume/suspend) target: the hidden
+  // <audio>, or the host <video> while a video sink is attached — its stream
+  // carries the audio track, so element-level audio state applies there.
+  function audioOutputEl(): HTMLMediaElement | null {
+    if (audioEl) return audioEl;
+    return videoSink ? videoEl! : null;
+  }
+
+  // Start the host <video> for a fresh connection: muted flag, persisted
+  // volume/suspend prefs, and an autoplay attempt (muted by default) — a
+  // paused element presents no frames.
+  function startVideoEl() {
+    const el = videoEl!;
+    el.muted = mutedState;
+    el.volume = volumePref;
+    if (audioSuspendedPref) el.pause();
+    else el.play().catch((e) => log(`video play failed: ${e}`, 'err'));
+  }
+
   function wireAudio() {
     if (!audio || !audioReady) return;
     const track = audio.track;
     if (track) {
-      if (!audioEl) {
-        audioEl = document.createElement('audio');
-        document.body.appendChild(audioEl);
+      if (videoSink) {
+        // Video-element mode: the audio track rides the sink's stream — the
+        // element plays A+V. Muted/volume/suspend state already lives on it
+        // (startVideoEl / audioOutputEl).
+        videoSink.addTrack(track);
+        log(mutedState ? 'audio ready (muted — click to unmute)' : 'audio ready', 'info');
+      } else {
+        if (!audioEl) {
+          audioEl = document.createElement('audio');
+          document.body.appendChild(audioEl);
+        }
+        audioEl.srcObject = new MediaStream([track]);
+        audioEl.muted = mutedState;
+        applyAudioElPrefs();
+        log(mutedState ? 'audio ready (muted — click to unmute)' : 'audio ready', 'info');
       }
-      audioEl.srcObject = new MediaStream([track]);
-      audioEl.muted = mutedState;
-      log(mutedState ? 'audio ready (muted — click to unmute)' : 'audio ready', 'info');
       if (muteBtn) { muteBtn.disabled = false; muteBtn.classList.toggle('muted', mutedState); }
     } else {
       if (muteBtn) { muteBtn.disabled = false; muteBtn.classList.toggle('muted', mutedState); }
@@ -320,8 +403,9 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
   // embedder supplies a muteBtn; otherwise mute is driven via setMuted().
   if (muteBtn) {
     muteBtn.addEventListener('click', () => {
-      if (!audioEl) return;
-      setMuted(!audioEl.muted);
+      const el = audioOutputEl();
+      if (!el) return;
+      setMuted(!el.muted);
     });
   }
 
@@ -346,7 +430,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     manualDisconnect = false;
     setConnState('connecting');
 
-    if (!decodeInWorker && !canvas) {
+    if (!decodeInWorker && !videoSinkMode && !canvas) {
       log('canvas element required when decodeInWorker is false', 'err');
       return;
     }
@@ -361,13 +445,21 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     ui.onCertMode?.(hashHex ? 'self' : 'mkcert');
 
     firstFrame = true;
+    if (videoSinkMode) {
+      // Video-element output replaces the canvas renderer in both decode
+      // paths: decoded frames go to the sink's generator track.
+      videoSink = new VideoSink(videoEl!);
+      startVideoEl();
+    }
     if (!decodeInWorker) {
-      // The guard above guarantees canvas is present whenever !decodeInWorker;
-      // TS cannot carry that relational narrowing here, hence the assertion.
-      renderer = new CanvasRenderer(canvas!);
+      // The guard above guarantees a canvas whenever !decodeInWorker and no
+      // video element is active; TS cannot carry that relational narrowing,
+      // hence the assertion.
+      if (!videoSinkMode) renderer = new CanvasRenderer(canvas!);
       video = new VideoPipeline({
         onFrame: (frame) => {
-          renderer?.draw(frame);
+          if (videoSink) videoSink.feed(frame);
+          else renderer?.draw(frame);
           if (firstFrame) {
             firstFrame = false;
             ui.onFirstFrame(frame.displayWidth, frame.displayHeight);
@@ -376,11 +468,13 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
         onError: (e) => log(`video err: ${e}`, 'err'),
         onConfigured: (info) => ui.onVideoConfigured(info),
       });
+      // Pipelines are recreated per connect — re-apply the persisted state.
+      video.setDecodeSuspended(decodeSuspendedPref);
     } else {
       // Worker-decode mode: no main-side pipeline. With a canvas the
       // transferred frames render locally (renderer owns the frames);
       // without one they go raw to the host via ui.onDecodedFrame.
-      if (canvas) {
+      if (canvas && !videoSinkMode) {
         renderer = new CanvasRenderer(canvas!);
       }
     }
@@ -475,6 +569,7 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
             audio = isOpus
               ? new OpusAudioPipeline(audioCb)
               : new AacAudioPipeline(audioCb);
+            audio.setDecodeSuspended(decodeSuspendedPref);
           }
         }
         break;
@@ -483,23 +578,43 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
           firstFrame = false;
           ui.onFirstFrame(msg.frame.displayWidth, msg.frame.displayHeight);
         }
-        if (renderer) renderer.draw(msg.frame); // worker-render mode: renderer owns the frame
+        if (decodeSuspendedPref) {
+          // Decode suspended (paused): the frame arrived already decoded —
+          // release it here instead of feeding the sink/renderer (same
+          // close-on-discard discipline the sink applies while paused).
+          msg.frame.close();
+          break;
+        }
+        if (videoSink) videoSink.feed(msg.frame);
+        else if (renderer) renderer.draw(msg.frame); // worker-render mode: renderer owns the frame
         else ui.onDecodedFrame?.(msg.frame);
         break;
       case 'audioData':
+        if (decodeSuspendedPref) {
+          // Decode suspended (paused): release worker-decoded audio before
+          // the sink path (which would otherwise also create it lazily).
+          msg.data.close();
+          break;
+        }
         if (workerAudio) {
           if (!audioReady && !workerAudioFailed) {
-            // Lazy sink, mirroring wireAudio(): MSTG → <audio> → mute path.
-            // The pipeline vars stay null in worker mode.
+            // Lazy sink, mirroring wireAudio(): MSTG audio track → element →
+            // mute path. The pipeline vars stay null in worker mode.
             try {
               const gen = new MediaStreamTrackGenerator({ kind: 'audio' });
               workerAudioWriter = gen.writable.getWriter();
-              if (!audioEl) {
-                audioEl = document.createElement('audio');
-                document.body.appendChild(audioEl);
+              if (videoSink) {
+                // Video-element mode: the audio track rides the sink's stream.
+                videoSink.addTrack(gen);
+              } else {
+                if (!audioEl) {
+                  audioEl = document.createElement('audio');
+                  document.body.appendChild(audioEl);
+                }
+                audioEl.srcObject = new MediaStream([gen]);
+                audioEl.muted = mutedState;
+                applyAudioElPrefs();
               }
-              audioEl.srcObject = new MediaStream([gen]);
-              audioEl.muted = mutedState;
               log(mutedState ? 'audio ready (muted — click to unmute)' : 'audio ready', 'info');
               if (muteBtn) { muteBtn.disabled = false; muteBtn.classList.toggle('muted', mutedState); }
               audioReady = true;
@@ -536,11 +651,14 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
         if (!pcmPlayer) {
           pcmPlayer = new PcmPlayer();
           pcmPlayer.setMuted(mutedState);
+          pcmPlayer.setVolume(volumePref);
           if (ui.onAudioMeter) pcmPlayer.onMeter(ui.onAudioMeter);
         }
         if (!pcmPlayer.ready) {
           void pcmPlayer.init(msg.channelCount).then(() => {
-            void pcmPlayer?.resume();
+            // init() resumes the AudioContext; re-suspend when the pref says so.
+            if (audioSuspendedPref) void pcmPlayer?.suspend();
+            else void pcmPlayer?.resume();
             pcmPlayer?.feed(msg.samples, msg.channelCount);
             if (muteBtn) { muteBtn.disabled = false; muteBtn.classList.toggle('muted', mutedState); }
           });
@@ -600,12 +718,44 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
 
   function setMuted(muted: boolean) {
     mutedState = muted;
-    if (audioEl) {
-      audioEl.muted = muted;
-      if (!muted) audioEl.play().catch((e) => log(`audio play failed: ${e}`, 'err'));
+    const el = audioOutputEl();
+    if (el) {
+      el.muted = muted;
+      // A suspended element stays paused; unmuting alone must not restart it.
+      if (!muted && !audioSuspendedPref) el.play().catch((e) => log(`audio play failed: ${e}`, 'err'));
     }
     pcmPlayer?.setMuted(muted);
     if (muteBtn) muteBtn.classList.toggle('muted', muted);
+  }
+
+  function setVolume(v: number) {
+    // Clamp 0..1 (HTMLMediaElement.volume throws on NaN/out-of-range).
+    volumePref = Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+    const el = audioOutputEl();
+    if (el) el.volume = volumePref;
+    pcmPlayer?.setVolume(volumePref);
+  }
+
+  function setAudioSuspended(suspended: boolean) {
+    audioSuspendedPref = suspended;
+    const el = audioOutputEl();
+    if (suspended) {
+      el?.pause();
+      void pcmPlayer?.suspend();
+    } else {
+      if (el) el.play().catch((e) => log(`audio play failed: ${e}`, 'err'));
+      void pcmPlayer?.resume();
+    }
+  }
+
+  // Suspend the decode path alongside the audio-output suspend above: the
+  // main-mode pipelines drop encoded media, and in worker-decode mode the
+  // pref gates decoded frames/audio at the message boundary (the worker's
+  // own pipelines keep decoding — nothing tells them to stop).
+  function setDecodeSuspended(suspended: boolean) {
+    decodeSuspendedPref = suspended;
+    video?.setDecodeSuspended(suspended);
+    audio?.setDecodeSuspended(suspended);
   }
 
   return {
@@ -615,12 +765,16 @@ export function createViewer(config: ViewerConfig): ViewerHandle {
     getLatencyMs: () => currentLatencyMs,
     setStream,
     setMuted,
+    setVolume,
+    setAudioSuspended,
+    setDecodeSuspended,
     onVisibilityChange(visible: boolean) {
       worker?.postMessage({ cmd: 'visibility', visible });
     },
     getVideo: () => video,
     getAudio: () => audio,
     getRenderer: () => renderer,
+    getSink: () => videoSink,
     getWorker: () => worker,
     isActive: () => connState !== 'idle',
   };
