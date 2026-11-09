@@ -35,6 +35,13 @@ if (decodeParam === 'software' || decodeParam === 'hardware') {
 // through the standard <audio>/mute path.
 const workerMode = new URLSearchParams(location.search).get('worker') === '1';
 
+// ?sink=video: output to the <video> element below via a video
+// MediaStreamTrackGenerator (GPU-side compositing — A/B against the
+// default canvas path). Single player: both players would contend for
+// the one element, so rendition switches go serial, not overlap.
+const videoEl = document.getElementById('video-el') as HTMLVideoElement | null;
+const sinkMode = new URLSearchParams(location.search).get('sink') === 'video' && !!videoEl;
+
 // --- Pacing persistence (render ON / decode OFF by default, as in advanced.tsx) ---
 const savedRenderPacing = localStorage.getItem('quicsrt-pacing-render') !== '0';
 const savedDecodePacing = localStorage.getItem('quicsrt-pacing-decode') === '1';
@@ -62,10 +69,17 @@ const mountOpts = {
       decodeParam === 'hardware' ? 'prefer-hardware' as const : undefined,
   } : {}),
 };
-const players = [mountPlayer(canvas, mountOpts), mountPlayer(canvasB, mountOpts)];
+const players = sinkMode
+  ? [mountPlayer(null, { ...mountOpts, video: videoEl! })]
+  : [mountPlayer(canvas, mountOpts), mountPlayer(canvasB, mountOpts)];
 const canvases = [canvas, canvasB];
 // The active player owns the visible canvas; an overlap swap flips this.
 let activeIdx = 0;
+if (sinkMode) {
+  canvas.style.display = 'none';
+  canvasB.style.display = 'none';
+  videoEl!.style.display = 'block';
+}
 
 // --- Controls ---
 connectBtn.addEventListener('click', () => {
@@ -265,7 +279,7 @@ function armWatchdog() {
 // simulcast all rungs share one timeline, so it overlaps like the rest.)
 function switchTo(value: string) {
   const p = players[activeIdx];
-  if (p.state === 'idle') {
+  if (p.state === 'idle' || players.length === 1) {
     // Nothing is playing: record the name; the next connect() uses it.
     cancelOverlap();
     p.setStream(streamFor(value));

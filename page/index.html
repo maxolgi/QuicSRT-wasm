@@ -45,6 +45,9 @@
       /* Hidden overlap stage: shown (inline display: block) when an overlap
          swap makes it the active canvas; the old one is hidden the same way. */
       #video-canvas-b { display: none; }
+      /* ?sink=video output element: shown (inline display: block) when the
+         page mounts the video-element sink; the canvases hide the same way. */
+      #video-el { display: none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
       /* Fullscreen targets the stage (see main.ts): a canvas swap inside
          it never display:nones the fullscreen element. */
       #video-stage:fullscreen { width: 100vw; height: 100vh; background: #000; }
@@ -203,6 +206,7 @@
       <div id="video-stage">
         <canvas id="video-canvas" width="640" height="360"></canvas>
         <canvas id="video-canvas-b" width="640" height="360"></canvas>
+        <video id="video-el" playsinline muted></video>
       </div>
       <div class="controls">
         <button id="connect">connect</button>
