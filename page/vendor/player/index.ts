@@ -27,10 +27,13 @@
 // qualityLevels().selectedIndex = -1 (the default) lets the built-in ABR
 // engine step the ladder off the ~1 Hz 'stats' events. Switches are serial
 // setStream reconnects confirmed by 'playing' and bounded by a 12 s
-// watchdog. See setRungs()/qualityLevels() below for the full contract.
+// watchdog; the `seamless` option swaps that for an overlap join (see
+// PlayerOptions.seamless). See setRungs()/qualityLevels() below for the
+// full contract.
 
 import { createViewer } from '../shared/viewer';
 import type { ViewerHandle, ConnectionState } from '../shared/viewer';
+import type { AudioMeterData } from '../shared/types';
 import type { CanvasRenderer } from '../render';
 import type { VideoSink } from '../video-sink';
 import type { VideoPipeline, OpusAudioPipeline, AacAudioPipeline } from '../decode';
@@ -87,6 +90,11 @@ export interface PlayerOptions {
    *  recreated per connection and a transferred port dies with it.
    *  Default: parent-post path (reference-viewer behavior). */
   pcmPort?: MessagePort | (() => MessagePort);
+  /** Seamless (freezeless) rung switching on a connected player: instead
+   *  of a serial setStream reconnect, a hidden sinkless joiner viewer
+   *  pre-connects to the target stream and swaps in on its first decoded
+   *  frame — the old stream keeps playing until then. Default false. */
+  seamless?: boolean;
 }
 
 export type PlayerState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error';
@@ -119,7 +127,8 @@ export interface PlayerHandle extends EventTarget {
   //   'decodedaudio'  → CustomEvent<AudioData>    (decodeInWorker mode only; host owns lifecycle)
   //   'qualitychange' → CustomEvent<PlayerQualityChangeDetail>
   //                     (every applied ladder switch: ABR steps, manual picks,
-  //                     setStream() onto a ladder stream, watchdog reverts)
+  //                     setStream() onto a ladder stream, watchdog reverts,
+  //                     and with `seamless`, join swaps and join-abort reverts)
   /** Connect; resolves on first decoded frame, rejects on a terminal error
    *  (or if disconnect()/destroy() interrupts the initial connect). */
   connect(): Promise<void>;
@@ -227,6 +236,20 @@ const EMPTY_TIME_RANGES: TimeRanges = Object.freeze({
 // one for the session (mirrors the reference page's watchdog windows).
 const QUALITY_SWITCH_TIMEOUT_MS = 12_000;
 
+/** A seamless overlap join in flight: the joiner viewer pre-connects
+ *  sinkless to the target stream; its first frame promotes it, the timer
+ *  aborts a join that never decoded (bench + revert). `prevStream` is
+ *  what the active viewer keeps playing if the join is dropped. */
+interface PendingJoin {
+  rung: string;
+  fromRung: string;
+  auto: boolean;
+  viewer: ViewerHandle;
+  t0: number;
+  prevStream: string | undefined;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 export function mountPlayer(canvas: HTMLCanvasElement | null, opts: PlayerOptions = {}): PlayerHandle {
   return new Player(canvas, opts);
 }
@@ -248,6 +271,16 @@ class Player extends EventTarget implements PlayerHandle {
   private renderPacingPref: boolean;
   private decodePacingPref: boolean;
   private autoReconnect: boolean;
+  private readonly seamless: boolean;
+  /** Constructor inputs kept for seamless joiner mounts (same surface and
+   *  endpoint config as the primary viewer). */
+  private readonly canvasEl: HTMLCanvasElement | null;
+  private readonly viewerOpts: PlayerOptions;
+  private readonly workerDecode: boolean;
+  /** An output surface (canvas or video element) is configured — joiner
+   *  attachOutput() is meaningful only then; without one a joiner stays
+   *  sinkless forever and frames keep flowing to 'decodedframe'. */
+  private readonly hasOutput: boolean;
 
   private everConnected = false;
   private manualDisconnect = false;
@@ -281,6 +314,12 @@ class Player extends EventTarget implements PlayerHandle {
   /** The in-flight switch was engine-initiated. */
   private pendingAuto = false;
   private qualityTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Overlap join in flight (seamless only; null otherwise). */
+  private pendingJoin: PendingJoin | null = null;
+  /** True between a join swap and the swap frame's onDecodedFrame call:
+   *  that frame predates attachOutput(), so it closes instead of emitting
+   *  — the attached surface presents from the next frame. */
+  private dropSwapFrame = false;
 
   constructor(canvas: HTMLCanvasElement | null, opts: PlayerOptions) {
     super();
@@ -288,6 +327,11 @@ class Player extends EventTarget implements PlayerHandle {
     this.renderPacingPref = opts.renderPacing ?? true;
     this.decodePacingPref = opts.decodePacing ?? false;
     this.autoReconnect = opts.autoReconnect ?? true;
+    this.seamless = opts.seamless ?? false;
+    this.canvasEl = canvas;
+    this.viewerOpts = opts;
+    this.workerDecode = opts.decodeInWorker ?? false;
+    this.hasOutput = !!(canvas || opts.video);
     this.baseStream = opts.stream;
     this.appliedStream = opts.stream;
     this.levels = createQualityLevelList({
@@ -296,39 +340,7 @@ class Player extends EventTarget implements PlayerHandle {
       setSelectedIndex: (index) => this.onSelectIndex(index),
     });
 
-    this.viewer = createViewer({
-      canvas: canvas ?? undefined,
-      video: opts.video,
-      host: opts.host,
-      port: opts.port,
-      stream: opts.stream,
-      token: opts.token,
-      certHash: opts.certHash,
-      latencyMs: opts.latencyMs ?? 120,
-      decodeInWorker: opts.decodeInWorker ?? false,
-      hwMode: opts.hwMode,
-      workerAudio: opts.workerAudio,
-      autoReconnect: opts.autoReconnect ?? true,
-      workerUrl: opts.workerUrl,
-      url: opts.url,
-      pcmPort: opts.pcmPort,
-      ui: {
-        log: (msg, cls) => this.onLog(msg, cls),
-        setStatus: () => {},
-        onStateChange: (s) => this.onViewerState(s),
-        onFirstFrame: (w, h) => this.onFirstFrame(w, h),
-        onVideoConfigured: () => {},
-        onAudioReady: () => this.ensureAudioStarted(),
-        onStats: (stats, demux) => {
-          this.emit('stats', { stats, demux } satisfies PlayerStatsDetail);
-          this.abrTick(stats);
-        },
-        onDrift: (driftMs) => { if (driftMs !== null) this.emit('drift', driftMs); },
-        onDecodedFrame: (frame) => this.emit('decodedframe', frame),
-        onDecodedAudio: (data) => this.emit('decodedaudio', data),
-        onAudioMeter: (data) => this.emit('audiometer', data),
-      },
-    });
+    this.viewer = Player.mountViewer(this, canvas, opts, false);
 
     if (opts.muted !== undefined) this.viewer.setMuted(opts.muted);
 
@@ -337,6 +349,46 @@ class Player extends EventTarget implements PlayerHandle {
       // does it manually). The muted default keeps autoplay policy happy.
       this.connect().catch(() => {});
     }
+  }
+
+  /** Single createViewer wiring for the primary viewer and seamless
+   *  joiners: every ui callback carries its viewer so the player can
+   *  identity-gate callbacks to whichever viewer is active. A joiner
+   *  additionally connects sinkless (ViewerConfig.joiner) and never takes
+   *  a pcmPort (its pcm drops at the message boundary pre-attach). */
+  private static mountViewer(p: Player, canvas: HTMLCanvasElement | null, opts: PlayerOptions, joiner: boolean): ViewerHandle {
+    const self = createViewer({
+      canvas: canvas ?? undefined,
+      video: opts.video,
+      host: opts.host,
+      port: opts.port,
+      stream: opts.stream,
+      token: opts.token,
+      certHash: opts.certHash,
+      latencyMs: joiner ? p.viewer.getLatencyMs() : opts.latencyMs ?? 120,
+      decodeInWorker: opts.decodeInWorker ?? false,
+      hwMode: opts.hwMode,
+      workerAudio: opts.workerAudio,
+      joiner,
+      autoReconnect: opts.autoReconnect ?? true,
+      workerUrl: opts.workerUrl,
+      url: opts.url,
+      pcmPort: joiner ? undefined : opts.pcmPort,
+      ui: {
+        log: (msg, cls) => p.onLog(self, msg, cls),
+        setStatus: () => {},
+        onStateChange: (s) => p.onViewerState(self, s),
+        onFirstFrame: (w, h) => p.onFirstFrame(self, w, h),
+        onVideoConfigured: () => {},
+        onAudioReady: () => p.onAudioReady(self),
+        onStats: (stats, demux) => p.onStats(self, stats, demux),
+        onDrift: (driftMs) => p.onDrift(self, driftMs),
+        onDecodedFrame: (frame) => p.onDecodedFrame(self, frame),
+        onDecodedAudio: (data) => p.onDecodedAudio(self, data),
+        onAudioMeter: (data) => p.onAudioMeter(self, data),
+      },
+    });
+    return self;
   }
 
   private emit(type: string, detail?: unknown): void {
@@ -359,7 +411,15 @@ class Player extends EventTarget implements PlayerHandle {
     this.emit('waiting');
   }
 
-  private onLog(msg: string, cls?: string): void {
+  private onLog(sender: ViewerHandle, msg: string, cls?: string): void {
+    if (sender !== this.viewer) {
+      // Joiner traffic surfaces errors only — its reconnect churn must
+      // not flip the still-playing session's state.
+      if (cls === 'err') {
+        this.emit('error', { message: msg } satisfies PlayerErrorDetail);
+      }
+      return;
+    }
     // Reconnect is scheduled with a delay — surface it immediately so the
     // host can show a buffering indicator during the wait.
     if (msg.startsWith('reconnecting in')) {
@@ -381,7 +441,10 @@ class Player extends EventTarget implements PlayerHandle {
     }
   }
 
-  private onViewerState(s: ConnectionState): void {
+  private onViewerState(sender: ViewerHandle, s: ConnectionState): void {
+    // Only the active viewer drives player state (a joiner's transitions
+    // stay internal; the old viewer's post-swap teardown is dropped).
+    if (sender !== this.viewer) return;
     if (s === 'connecting') {
       if (this.everConnected && !this.manualDisconnect) {
         this.noteWaiting();
@@ -430,7 +493,12 @@ class Player extends EventTarget implements PlayerHandle {
     }
   }
 
-  private onFirstFrame(w: number, h: number): void {
+  private onFirstFrame(sender: ViewerHandle, w: number, h: number): void {
+    if (sender !== this.viewer) {
+      // A non-active viewer's first frame is the join swap signal.
+      this.onJoinerFirstFrame(sender, w, h);
+      return;
+    }
     // readyState at entry distinguishes a fresh session (≤1: nothing has
     // presented yet) from a reconnect of one that has (4: never reset during
     // reconnects) — a user pause only exists in the latter.
@@ -468,8 +536,10 @@ class Player extends EventTarget implements PlayerHandle {
     this.emit('loadedmetadata');
     this.emit('canplay');
     // The switch window closes right at 'playing': the current rung is
-    // confirmed and ABR decisions may resume.
-    this.onQualityConfirmed();
+    // confirmed and ABR decisions may resume. A pending join owns that
+    // confirmation instead — this frame must not confirm the unconfirmed
+    // target.
+    if (this.pendingJoin === null) this.onQualityConfirmed();
     this.emit('playing');
     if (!this._paused) this.startTimeupdate();
     if (this.resolveConnect) {
@@ -478,6 +548,53 @@ class Player extends EventTarget implements PlayerHandle {
       this.resolveConnect = null;
       this.rejectConnect = null;
     }
+  }
+
+  private onAudioReady(sender: ViewerHandle): void {
+    if (sender !== this.viewer) return;
+    this.ensureAudioStarted();
+  }
+
+  private onStats(sender: ViewerHandle, stats: StatsMsg, demux: DemuxStatsMsg | null): void {
+    // Joiner stats stay dark while the active viewer feeds the ~1 Hz
+    // stream; post-promotion the joiner is the feed.
+    if (sender !== this.viewer) return;
+    this.emit('stats', { stats, demux } satisfies PlayerStatsDetail);
+    this.abrTick(stats);
+  }
+
+  private onDrift(sender: ViewerHandle, driftMs: number | null): void {
+    if (sender !== this.viewer || driftMs === null) return;
+    this.emit('drift', driftMs);
+  }
+
+  private onDecodedFrame(sender: ViewerHandle, frame: VideoFrame): void {
+    if (sender !== this.viewer) {
+      // Pre-attach joiner frame — no surface owns it.
+      frame.close();
+      return;
+    }
+    if (this.dropSwapFrame) {
+      // The frame that triggered the swap predates attachOutput() — the
+      // attached surface presents from the next frame.
+      this.dropSwapFrame = false;
+      frame.close();
+      return;
+    }
+    this.emit('decodedframe', frame);
+  }
+
+  private onDecodedAudio(sender: ViewerHandle, data: AudioData): void {
+    if (sender !== this.viewer) {
+      data.close();
+      return;
+    }
+    this.emit('decodedaudio', data);
+  }
+
+  private onAudioMeter(sender: ViewerHandle, data: AudioMeterData): void {
+    if (sender !== this.viewer) return;
+    this.emit('audiometer', data);
   }
 
   private failConnect(e: Error): void {
@@ -498,6 +615,7 @@ class Player extends EventTarget implements PlayerHandle {
     this._duration = 0;
     this._ptsAnchorUs = null;
     this.stopTimeupdate();
+    this.cancelJoin();
     this.emit('ended');
   }
 
@@ -543,6 +661,7 @@ class Player extends EventTarget implements PlayerHandle {
     if (this.destroyed) return;
     this.manualDisconnect = true;
     this.failConnect(new Error('disconnected'));
+    this.cancelJoin();
     this.viewer.disconnect();
   }
 
@@ -553,6 +672,7 @@ class Player extends EventTarget implements PlayerHandle {
     this.failConnect(new Error('destroyed'));
     this.stopTimeupdate();
     this.disarmQualityWatchdog();
+    this.cancelJoin();
     this.viewer.disconnect();
   }
 
@@ -635,7 +755,18 @@ class Player extends EventTarget implements PlayerHandle {
     this.emit('volumechange');
   }
 
-  setLatencyMs(ms: number): void { this.viewer.setLatencyMs(ms); }
+  setLatencyMs(ms: number): void {
+    // A pending join mounted at the old latency — re-switch so the swap
+    // lands at the new one (the viewer-side reconnect this triggers may
+    // carry the switch serially; that reconnect freezes anyway).
+    const join = this.pendingJoin;
+    const changed = join !== null && this.viewer.getLatencyMs() !== ms;
+    this.viewer.setLatencyMs(ms);
+    if (join !== null && changed) {
+      this.cancelJoin();
+      this.switchToRung(join.rung, join.auto);
+    }
+  }
 
   setStream(name: string): void {
     const rung = this.rungs !== null ? this.rungForStream(name) : null;
@@ -646,6 +777,8 @@ class Player extends EventTarget implements PlayerHandle {
       this.switchToRung(rung, false);
       return;
     }
+    // Off-ladder: the pending join's target names the old ladder — drop it.
+    this.cancelJoin();
     this.baseStream = name;
     this.appliedStream = name;
     if (this.rungs !== null) {
@@ -666,6 +799,7 @@ class Player extends EventTarget implements PlayerHandle {
       : [...new Set(rungs.map((s) => s.trim()).filter((s) => s !== ''))];
     this.benched.clear();
     this.disarmQualityWatchdog();
+    this.cancelJoin();
     this.inFlight = false;
     this.pendingAuto = false;
     if (this.rungs === null) {
@@ -720,7 +854,15 @@ class Player extends EventTarget implements PlayerHandle {
   private switchToRung(rung: string, auto: boolean): void {
     const target = this.streamForRung(rung);
     if (target === undefined) return; // no known base to build a target from
+    if (this.pendingJoin !== null) {
+      // One join at a time: a re-pick of the pending target is a no-op;
+      // any other pick supersedes it (the 12 s join window bounds the
+      // thrash).
+      if (this.pendingJoin.rung === rung) return;
+      this.cancelJoin();
+    }
     const from = this.currentRung;
+    const prevStream = this.appliedStream;
     // An applied switch is an explicit retry of a benched rung.
     this.benched.delete(rung);
     this.currentRung = rung;
@@ -729,6 +871,13 @@ class Player extends EventTarget implements PlayerHandle {
     this.appliedStream = target;
     this.inFlight = true;
     this.pendingAuto = auto;
+    if (this.seamless && this.viewer.isActive()) {
+      // Overlap join: the old stream keeps playing while the joiner
+      // pre-connects; 'qualitychange' fires at the swap (or the abort),
+      // when the new rung is actually live.
+      this.startJoin(rung, from ?? '', prevStream, auto);
+      return;
+    }
     this.armQualityWatchdog();
     this.emit('qualitychange', { from: from ?? '', to: rung, auto } satisfies PlayerQualityChangeDetail);
     this.viewer.setStream(target);
@@ -808,6 +957,112 @@ class Player extends EventTarget implements PlayerHandle {
     this.pendingAuto = false;
     this.confirmedRung = this.currentRung;
     if (wasAuto) this.abrEngine?.reset(); // fresh decision window after an ABR step
+  }
+
+  // --- Seamless overlap join (seamless option; one in flight at a time) ---
+
+  private startJoin(rung: string, fromRung: string, prevStream: string | undefined, auto: boolean): void {
+    // The serial watchdog would revert the unconfirmed selection mid-join;
+    // the join window owns confirmation until the swap or the abort.
+    this.disarmQualityWatchdog();
+    const viewer = Player.mountViewer(this, this.canvasEl, this.viewerOpts, true);
+    const join: PendingJoin = {
+      rung, fromRung, auto, viewer,
+      t0: performance.now(),
+      prevStream,
+      timer: null,
+    };
+    join.timer = setTimeout(() => this.onJoinTimeout(), QUALITY_SWITCH_TIMEOUT_MS);
+    this.pendingJoin = join;
+    const target = this.streamForRung(rung)!;
+    viewer.setStream(target); // recorded for the idle connect() below
+    viewer.connect();
+  }
+
+  /** Drop a pending join without abort semantics (superseded switch,
+   *  teardown, ladder reconfigure): frees the joiner's worker and
+   *  restores appliedStream to what the active viewer keeps playing. */
+  private cancelJoin(): void {
+    const join = this.pendingJoin;
+    if (join === null) return;
+    this.pendingJoin = null;
+    if (join.timer !== null) clearTimeout(join.timer);
+    join.viewer.disconnect();
+    this.appliedStream = join.prevStream;
+  }
+
+  /** The 12 s join window closed with no joiner frame: bench the rung and
+   *  revert the selection. The old stream never stopped playing, so no
+   *  setStream back — the switch window closes here instead. */
+  private onJoinTimeout(): void {
+    const join = this.pendingJoin;
+    if (join === null) return;
+    this.pendingJoin = null;
+    if (join.timer !== null) clearTimeout(join.timer);
+    join.viewer.disconnect();
+    this.benched.add(join.rung);
+    const back = this.confirmedRung ?? '';
+    if (this.manualRung === join.rung) this.manualRung = back;
+    this.currentRung = back;
+    this.levels.select(back);
+    this.appliedStream = this.streamForRung(back)!;
+    this.emit('qualitychange', { from: join.rung, to: back, auto: join.auto } satisfies PlayerQualityChangeDetail);
+    this.onQualityConfirmed();
+  }
+
+  /** The joiner decoded its first frame — the swap signal. Promote the
+   *  joiner to the active viewer, retire the old one, and carry the
+   *  player state across so the swap presents without a blip. */
+  private onJoinerFirstFrame(sender: ViewerHandle, w: number, h: number): void {
+    const join = this.pendingJoin;
+    if (join === null || join.viewer !== sender) return; // stray frame — ignore
+    this.pendingJoin = null;
+    if (join.timer !== null) clearTimeout(join.timer);
+    const old = this.viewer;
+    // Read before the disconnect — the old viewer's idle transition resets
+    // _paused.
+    const wasPaused = this._paused;
+    // Promote before the disconnect so the old viewer's teardown callbacks
+    // land as non-active (identity-gated) and surface no churn.
+    this.viewer = sender;
+    old.disconnect();
+    // Replay the player state BEFORE the attach: the attach builds the
+    // surface with the viewer-side prefs applied (muted/volume/suspend).
+    sender.setMuted(this._muted);
+    sender.setVolume(this._volume);
+    sender.setAudioSuspended(wasPaused);
+    sender.setDecodeSuspended(wasPaused);
+    if (this.hasOutput) {
+      // Main mode: the sinkless-path frame that triggered this swap
+      // re-enters onDecodedFrame after the attach — close it there.
+      this.dropSwapFrame = !this.workerDecode;
+      sender.attachOutput();
+    }
+    if (wasPaused) {
+      sender.getRenderer()?.pause();
+      sender.getSink()?.pause();
+    }
+    sender.getRenderer()?.setRenderPacing(this.renderPacingPref);
+    sender.getVideo()?.setDecodePacing(this.decodePacingPref);
+    // A rung swap starts a new session clock (reconnect parity).
+    this._ptsAnchorUs = null;
+    const changed = w !== this._videoWidth || h !== this._videoHeight;
+    this._videoWidth = w;
+    this._videoHeight = h;
+    if (changed) this.emit('resize', { width: w, height: h } satisfies PlayerResizeDetail);
+    if (this._state !== 'connected') {
+      // The old viewer dropped mid-join (its reconnect surfaced 'waiting')
+      // — the joiner is connected: pair it back up.
+      this.setState('connected');
+      this.emit('open');
+    }
+    this.emit('loadedmetadata');
+    this.emit('canplay');
+    this.onQualityConfirmed();
+    this.emit('playing');
+    if (!this._paused) this.startTimeupdate();
+    console.info('abr: seamless switch %s -> %s (join %dms)', join.fromRung, join.rung, Math.round(performance.now() - join.t0));
+    this.emit('qualitychange', { from: join.fromRung, to: join.rung, auto: join.auto } satisfies PlayerQualityChangeDetail);
   }
 
   /** list.selectedIndex assignment: -1 re-engages auto (an explicit retry —

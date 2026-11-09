@@ -52,6 +52,12 @@ const sinkMode = sinkParam !== 'canvas' && !!videoEl;
 // mounts — no hidden overlap joiner (canvas B keeps its CSS-hidden default).
 const sdkAbr = new URLSearchParams(location.search).get('abr') === 'sdk';
 
+// ?seamless=1: SDK rung switches ride the overlap join (joiner pre-connects
+// sinkless, swap on its first frame) instead of the serial setStream
+// reconnect. Only meaningful with ?abr=sdk (or SDK embedders passing the
+// PlayerOptions flag directly).
+const seamlessParam = new URLSearchParams(location.search).get('seamless') === '1';
+
 // --- Pacing persistence (render ON / decode OFF by default, as in advanced.tsx) ---
 const savedRenderPacing = localStorage.getItem('quicsrt-pacing-render') !== '0';
 const savedDecodePacing = localStorage.getItem('quicsrt-pacing-decode') === '1';
@@ -78,6 +84,7 @@ const mountOpts = {
       decodeParam === 'software' ? 'prefer-software' as const :
       decodeParam === 'hardware' ? 'prefer-hardware' as const : undefined,
   } : {}),
+  ...(seamlessParam ? { seamless: true } : {}),
 };
 const players = sinkMode
   ? [mountPlayer(null, { ...mountOpts, video: videoEl! })]
