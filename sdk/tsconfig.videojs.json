@@ -1,0 +1,23 @@
+// Declaration emit for the @quicsrt/videojs adapter package (build.sh sdk).
+// noCheck for the same reason as tsconfig.player.json; the emitted
+// adapters/videojs/tech.d.ts is moved to the package root as index.d.ts and
+// its vendored-player import rewritten to '@quicsrt/player' (the peer
+// dependency) — the rest of the emitted tree is discarded.
+{
+  "compilerOptions": {
+    "noCheck": true,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "outDir": "../sdk-dist/quicsrt-videojs/types",
+    "rootDir": "../page",
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "allowJs": false
+  },
+  "files": ["../page/adapters/videojs/tech.ts"]
+}

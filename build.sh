@@ -18,6 +18,12 @@ Commands:
              plus the shared/lazy chunk-* files and videojs.css) with the
              local esbuild (package.json - npm install);
              needs ./build.sh engine first
+    sdk      Assemble the publishable npm packages from the vendored player
+             SDK into sdk-dist/ (sdk/ holds the package templates):
+             @quicsrt/player (SDK entry + prebuilt worker + engine + d.ts)
+             and @quicsrt/videojs (tech adapter; video.js and the player
+             stay peer-external); gated by node sdk/smoke.mjs;
+             needs ./build.sh engine first
     deploy   Assemble the self-contained dist/ tree the supervised gateway
              serves as web_root: page html + page/bundle + the engine module
              at dist/build/ (the bundles' external ../build/srt_engine.mjs);
@@ -113,6 +119,76 @@ case "${1:-}" in
         "$ESBUILD" page/main.ts page/publish.tsx page/call.tsx page/videojs.ts --bundle --format=esm --splitting \
             --outdir=page/bundle --entry-names='[name]' --chunk-names='chunk-[name]-[hash]' \
             --jsx=automatic --jsx-import-source=preact
+        ;;
+    sdk)
+        # Publishable npm packages assembled from the vendored SDK (sdk/
+        # holds the source-of-truth package templates). Two packages:
+        #   @quicsrt/player  - mountPlayer entry + the worker as its own
+        #                      sibling bundle + the prebuilt engine + d.ts
+        #   @quicsrt/videojs - the video.js tech, with video.js AND the
+        #                      player kept external (peer dependencies)
+        [ -f build/srt_engine.mjs ] || { echo "build/srt_engine.mjs missing - run ./build.sh engine first" >&2; exit 1; }
+        ESBUILD="node_modules/.bin/esbuild"
+        [ -x "$ESBUILD" ] || { echo "esbuild not found at $ESBUILD - run: npm install" >&2; exit 1; }
+        TSC="node_modules/.bin/tsc"
+        [ -x "$TSC" ] || { echo "tsc not found at $TSC - run: npm install" >&2; exit 1; }
+        rm -rf sdk-dist
+        mkdir -p sdk-dist/quicsrt-player/build sdk-dist/quicsrt-videojs
+        cp sdk/quicsrt-player/package.json sdk/quicsrt-player/README.md sdk/quicsrt-player/CHANGELOG.md \
+            sdk-dist/quicsrt-player/
+        cp sdk/quicsrt-videojs/package.json sdk/quicsrt-videojs/README.md sdk/quicsrt-videojs/CHANGELOG.md \
+            sdk-dist/quicsrt-videojs/
+        # index.js: the SDK entry. The worker is NOT inlined here - the SDK's
+        # default workerUrl resolves ./worker.js beside this output (the
+        # new URL('./worker.js', import.meta.url) in viewer.ts survives
+        # esbuild untouched), so the worker ships as a sibling entry and
+        # worker.ts never enters this bundle (player + viewer import its
+        # types only).
+        "$ESBUILD" page/vendor/player/index.ts --bundle --format=esm --target=es2022 \
+            --outfile=sdk-dist/quicsrt-player/index.js
+        # worker.js: the page worker recipe (the emcc module stays external -
+        # it must be served as its own file because it spawns its pthread
+        # workers by self-importing srt_engine.mjs and fetches the .wasm
+        # relative to itself). The externals keep the import path AS WRITTEN
+        # in js/engine_module.js ('../build/srt_engine.mjs' relative to js/),
+        # which matches the page layout (bundle/ + ../build); the package
+        # instead nests the engine in build/ BESIDE the worker, so the
+        # emitted specifier is re-rooted ../ -> ./ to match the copy below.
+        "$ESBUILD" page/vendor/worker.ts --bundle --format=esm \
+            --external:../build/srt_engine.mjs --outfile=sdk-dist/quicsrt-player/worker.js
+        sed -i 's|\.\./build/srt_engine\.mjs|./build/srt_engine.mjs|g' sdk-dist/quicsrt-player/worker.js
+        cp build/srt_engine.mjs build/srt_engine.wasm sdk-dist/quicsrt-player/build/
+        # Declarations: tsc emits the player graph's d.ts tree into types/
+        # (rootDir page/vendor, --noCheck - the vendored sources are not
+        # type-clean under tsc; the bundler only strips their types).
+        # ambient.d.ts carries the MediaStreamTrackGenerator declaration the
+        # emitted decode.d.ts references but lib.dom lacks; the types entry
+        # pulls it in via the reference line.
+        "$TSC" -p sdk/tsconfig.player.json
+        cp sdk/quicsrt-player/ambient.d.ts sdk-dist/quicsrt-player/types/ambient.d.ts
+        sed -i '1i /// <reference path="../ambient.d.ts" />' sdk-dist/quicsrt-player/types/player/index.d.ts
+        # Adapter: video.js stays external so the HOST's instance (and its
+        # one registerTech registry) is used; the vendored player import is
+        # rewritten to the @quicsrt/player peer dependency - same rewrite in
+        # the emitted d.ts, so only tech.d.ts is kept from the tsc run.
+        "$ESBUILD" page/adapters/videojs/tech.ts --bundle --format=esm --target=es2022 \
+            --external:video.js --external:../../vendor/player/index \
+            --outfile=sdk-dist/quicsrt-videojs/index.js
+        sed -i 's|"../../vendor/player/index"|"@quicsrt/player"|' sdk-dist/quicsrt-videojs/index.js
+        "$TSC" -p sdk/tsconfig.videojs.json
+        mv sdk-dist/quicsrt-videojs/types/adapters/videojs/tech.d.ts sdk-dist/quicsrt-videojs/index.d.ts
+        rm -rf sdk-dist/quicsrt-videojs/types
+        sed -i "s|'../../vendor/player/index'|'@quicsrt/player'|" sdk-dist/quicsrt-videojs/index.d.ts
+        # Peer-resolution fixture for the smoke gate: makes the adapter's
+        # '@quicsrt/player' import resolve inside sdk-dist the way it would
+        # in an embedder's node_modules tree (outside both package dirs, so
+        # npm pack never sees it).
+        mkdir -p sdk-dist/node_modules/@quicsrt
+        ln -sfn ../../quicsrt-player sdk-dist/node_modules/@quicsrt/player
+        node sdk/smoke.mjs
+        echo "assembled sdk-dist/ (publishable npm packages):"
+        ls sdk-dist/quicsrt-player/* sdk-dist/quicsrt-player/build/* \
+            sdk-dist/quicsrt-videojs/*
         ;;
     deploy)
         # Self-contained dist/ for the supervised gateway's web_root

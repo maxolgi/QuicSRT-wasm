@@ -1,0 +1,23 @@
+// Declaration emit for the @quicsrt/player package (build.sh sdk).
+// noCheck: the vendored sources under page/vendor predate this tsconfig and
+// are not type-clean under tsc (the page bundles ship via esbuild, which
+// only strips types); the declaration emit itself is structural and needs
+// no checking, and the sdk smoke gate verifies the built output instead.
+{
+  "compilerOptions": {
+    "noCheck": true,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "outDir": "../sdk-dist/quicsrt-player/types",
+    "rootDir": "../page/vendor",
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "allowJs": false
+  },
+  "files": ["../page/vendor/player/index.ts"]
+}

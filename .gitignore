@@ -6,3 +6,5 @@ dist/
 cert-hash.js
 # player page build artifacts (esbuild output)
 page/bundle/
+# sdk build output (esbuild/tsc-assembled npm packages; sources in sdk/)
+sdk-dist/

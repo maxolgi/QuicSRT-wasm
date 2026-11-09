@@ -1,0 +1,41 @@
+{
+  "name": "@quicsrt/videojs",
+  "version": "0.1.0",
+  "description": "QuicSRT tech for video.js — plays quicsrt:// and application/quicsrt sources through the @quicsrt/player SDK",
+  "type": "module",
+  "license": "MPL-2.0",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "srt",
+    "webtransport",
+    "webcodecs",
+    "quicsrt",
+    "streaming",
+    "video.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "peerDependencies": {
+    "video.js": "^8.0.0",
+    "@quicsrt/player": "0.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxolgi/QuicSRT-wasm.git"
+  }
+}

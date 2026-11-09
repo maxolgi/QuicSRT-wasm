@@ -9,6 +9,7 @@
     "eruda": "3.4.3",
     "esbuild": "0.28.2",
     "preact": "10.29.7",
+    "typescript": "7.0.2",
     "video.js": "^8.24.2"
   }
 }

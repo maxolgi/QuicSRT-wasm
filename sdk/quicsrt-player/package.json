@@ -1,0 +1,39 @@
+{
+  "name": "@quicsrt/player",
+  "version": "0.1.0",
+  "description": "QuicSRT player SDK — SRT over WebTransport received and decoded (WebCodecs) in the browser, behind an HTMLMediaElement-shaped handle",
+  "type": "module",
+  "license": "MPL-2.0",
+  "main": "./index.js",
+  "types": "./types/player/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/player/index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "worker.js",
+    "build/",
+    "types/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "srt",
+    "webtransport",
+    "webcodecs",
+    "quicsrt",
+    "streaming",
+    "player"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxolgi/QuicSRT-wasm.git"
+  }
+}
