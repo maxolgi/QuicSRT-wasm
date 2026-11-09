@@ -21,6 +21,13 @@
 //   Extra media events: play, pause, timeupdate (~4 Hz while frames flow),
 //     volumechange, durationchange, loadedmetadata (per connection, before
 //     canplay), ended.
+// Quality ladder / ABR (inert until setRungs()): rungs are rendition
+// stream-name suffixes the source publishes as `${base}_${suffix}`;
+// qualityLevels() exposes the video.js-shaped level list, and
+// qualityLevels().selectedIndex = -1 (the default) lets the built-in ABR
+// engine step the ladder off the ~1 Hz 'stats' events. Switches are serial
+// setStream reconnects confirmed by 'playing' and bounded by a 12 s
+// watchdog. See setRungs()/qualityLevels() below for the full contract.
 
 import { createViewer } from '../shared/viewer';
 import type { ViewerHandle, ConnectionState } from '../shared/viewer';
@@ -28,6 +35,12 @@ import type { CanvasRenderer } from '../render';
 import type { VideoSink } from '../video-sink';
 import type { VideoPipeline, OpusAudioPipeline, AacAudioPipeline } from '../decode';
 import type { StatsMsg, DemuxStatsMsg } from '../worker';
+import { createAbr } from '../abr';
+import type { AbrEngine } from '../abr';
+import { createQualityLevelList } from '../quality';
+import type { QualityLevelList, QualityLevelListInternal } from '../quality';
+
+export type { QualityLevel, QualityLevelList } from '../quality';
 
 export interface PlayerOptions {
   host?: string;
@@ -92,10 +105,21 @@ export interface PlayerResizeDetail {
   height: number;
 }
 
+/** Rung values ('' = source) name the streams; auto marks an engine-initiated
+ *  switch (false = host/manual). */
+export interface PlayerQualityChangeDetail {
+  from: string;
+  to: string;
+  auto: boolean;
+}
+
 export interface PlayerHandle extends EventTarget {
   // Events (via addEventListener):
   //   'decodedframe'  → CustomEvent<VideoFrame>   (decodeInWorker mode only; host owns lifecycle)
   //   'decodedaudio'  → CustomEvent<AudioData>    (decodeInWorker mode only; host owns lifecycle)
+  //   'qualitychange' → CustomEvent<PlayerQualityChangeDetail>
+  //                     (every applied ladder switch: ABR steps, manual picks,
+  //                     setStream() onto a ladder stream, watchdog reverts)
   /** Connect; resolves on first decoded frame, rejects on a terminal error
    *  (or if disconnect()/destroy() interrupts the initial connect). */
   connect(): Promise<void>;
@@ -145,7 +169,36 @@ export interface PlayerHandle extends EventTarget {
   setMuted(muted: boolean): void;
   setLatencyMs(ms: number): void;
   readonly latencyMs: number;
-  /** Switch streams. Reconnects if active and the name changed. */
+  /** Configure the rendition ladder and arm the quality machinery. `rungs`
+   *  is the ordered TOP-DOWN list of rendition stream-name suffixes the
+   *  source publishes as `${base}_${suffix}` (e.g. ['540p']); the ladder
+   *  prepends the base stream itself as the top rung ('' / source). The
+   *  base is the stream the player was constructed with (`stream` option)
+   *  or the target of the last setStream() that did not itself name a
+   *  rung. `null` tears the ladder back down. Suffixes are trimmed,
+   *  empties dropped, duplicates removed. Inert by default: without
+   *  setRungs() the level list stays empty and no switching or ABR runs. */
+  setRungs(rungs: string[] | null): void;
+  /** The live quality-level list (video.js QualityLevelList-shaped; see
+   *  page/vendor/quality.ts). Levels carry {id, label, height?, bitrate?}
+   *  — id/label are the rung value ('' = source), height parses from
+   *  '<n>p' suffixes, bitrate is not derivable in v1 — plus a `selected`
+   *  flag naming the rung currently playing. List events: 'change'
+   *  (selection moved), 'addqualitylevel'/'removequalitylevel' (setRungs
+   *  rebuilds). `selectedIndex` reads -1 while automatic selection (ABR)
+   *  owns the ladder — the default; assigning an index switches to that
+   *  rung manually and parks the engine, assigning -1 re-engages it.
+   *  Rungs whose switch watchdog fires are benched for the session:
+   *  skipped by auto stepping, unbenched by re-picking them or by
+   *  re-engaging auto. */
+  qualityLevels(): QualityLevelList;
+  /** Switch streams. Reconnects if active and the name changed. With a
+   *  ladder configured, a target naming a rung of the current base
+   *  (`${base}` or `${base}_${suffix}`) rides the ladder machinery —
+   *  selection follows, the switch is watched and 'qualitychange' fires;
+   *  in manual mode the manual pick follows too. Any other target
+   *  re-homes the ladder: it becomes the new base with the source rung
+   *  selected (no ladder switch is applied). */
   setStream(name: string): void;
   setRenderPacing(enabled: boolean): void;
   setDecodePacing(enabled: boolean): void;
@@ -168,6 +221,11 @@ const EMPTY_TIME_RANGES: TimeRanges = Object.freeze({
     throw new RangeError(`no time range at index ${index}`);
   },
 });
+
+// A ladder switch must confirm with a 'playing' within this window or the
+// watchdog reverts it to the last confirmed rung and benches the failed
+// one for the session (mirrors the reference page's watchdog windows).
+const QUALITY_SWITCH_TIMEOUT_MS = 12_000;
 
 export function mountPlayer(canvas: HTMLCanvasElement | null, opts: PlayerOptions = {}): PlayerHandle {
   return new Player(canvas, opts);
@@ -200,12 +258,43 @@ class Player extends EventTarget implements PlayerHandle {
   private rejectConnect: ((e: Error) => void) | null = null;
   private timeupdateTimer: ReturnType<typeof setInterval> | null = null;
 
+  // --- Quality ladder / ABR (all inert until setRungs() arms it) ---
+  private levels: QualityLevelListInternal;
+  private abrEngine: AbrEngine | null = null;
+  /** Configured rung suffixes, top-down; null = no ladder. */
+  private rungs: string[] | null = null;
+  /** Base (source) stream name: the `stream` option, or the last host
+   *  setStream() target that did not itself name a rung. */
+  private baseStream: string | undefined;
+  /** The last stream name handed to the viewer. */
+  private appliedStream: string | undefined;
+  /** The manually picked rung (ladder value); null = automatic. */
+  private manualRung: string | null = null;
+  /** The rung whose stream the player is on (derived from appliedStream). */
+  private currentRung: string | null = null;
+  /** The last rung confirmed by a 'playing' — the watchdog fallback. */
+  private confirmedRung: string | null = null;
+  /** Rungs whose switch watchdog fired this session (skipped by auto). */
+  private benched = new Set<string>();
+  /** A switch is in flight: applied, awaiting its confirming 'playing'. */
+  private inFlight = false;
+  /** The in-flight switch was engine-initiated. */
+  private pendingAuto = false;
+  private qualityTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(canvas: HTMLCanvasElement | null, opts: PlayerOptions) {
     super();
     this._muted = opts.muted ?? true;
     this.renderPacingPref = opts.renderPacing ?? true;
     this.decodePacingPref = opts.decodePacing ?? false;
     this.autoReconnect = opts.autoReconnect ?? true;
+    this.baseStream = opts.stream;
+    this.appliedStream = opts.stream;
+    this.levels = createQualityLevelList({
+      getSelectedIndex: () =>
+        this.manualRung === null ? -1 : this.qualityLadder().indexOf(this.manualRung),
+      setSelectedIndex: (index) => this.onSelectIndex(index),
+    });
 
     this.viewer = createViewer({
       canvas: canvas ?? undefined,
@@ -230,7 +319,10 @@ class Player extends EventTarget implements PlayerHandle {
         onFirstFrame: (w, h) => this.onFirstFrame(w, h),
         onVideoConfigured: () => {},
         onAudioReady: () => this.ensureAudioStarted(),
-        onStats: (stats, demux) => this.emit('stats', { stats, demux } satisfies PlayerStatsDetail),
+        onStats: (stats, demux) => {
+          this.emit('stats', { stats, demux } satisfies PlayerStatsDetail);
+          this.abrTick(stats);
+        },
         onDrift: (driftMs) => { if (driftMs !== null) this.emit('drift', driftMs); },
         onDecodedFrame: (frame) => this.emit('decodedframe', frame),
         onDecodedAudio: (data) => this.emit('decodedaudio', data),
@@ -257,13 +349,21 @@ class Player extends EventTarget implements PlayerHandle {
     this.emit('statechange', s);
   }
 
+  /** Reconnect-ish transition: surface 'waiting' and re-baseline the ABR
+   *  engine — the fresh connection restarts the cumulative stats counters
+   *  at zero, so deltas against the old baseline would be nonsense. */
+  private noteWaiting(): void {
+    this.setState('reconnecting');
+    this.stopTimeupdate();
+    this.abrEngine?.reset();
+    this.emit('waiting');
+  }
+
   private onLog(msg: string, cls?: string): void {
     // Reconnect is scheduled with a delay — surface it immediately so the
     // host can show a buffering indicator during the wait.
     if (msg.startsWith('reconnecting in')) {
-      this.setState('reconnecting');
-      this.stopTimeupdate();
-      this.emit('waiting');
+      this.noteWaiting();
       return;
     }
     if (cls === 'err') {
@@ -284,9 +384,7 @@ class Player extends EventTarget implements PlayerHandle {
   private onViewerState(s: ConnectionState): void {
     if (s === 'connecting') {
       if (this.everConnected && !this.manualDisconnect) {
-        this.setState('reconnecting');
-        this.stopTimeupdate();
-        this.emit('waiting');
+        this.noteWaiting();
       } else {
         this.setState('connecting');
         this.emit('loadstart');
@@ -316,9 +414,7 @@ class Player extends EventTarget implements PlayerHandle {
         this.emit('close');
       } else if (this.everConnected) {
         if (this.autoReconnect) {
-          this.setState('reconnecting');
-          this.stopTimeupdate();
-          this.emit('waiting');
+          this.noteWaiting();
         } else if (!this.connectPromise) {
           // Permanent stop: the viewer went idle without a manual
           // disconnect and will not retry — 'ended' (manual disconnect keeps
@@ -371,6 +467,9 @@ class Player extends EventTarget implements PlayerHandle {
     this.ensureAudioStarted();
     this.emit('loadedmetadata');
     this.emit('canplay');
+    // The switch window closes right at 'playing': the current rung is
+    // confirmed and ABR decisions may resume.
+    this.onQualityConfirmed();
     this.emit('playing');
     if (!this._paused) this.startTimeupdate();
     if (this.resolveConnect) {
@@ -453,6 +552,7 @@ class Player extends EventTarget implements PlayerHandle {
     this.manualDisconnect = true;
     this.failConnect(new Error('destroyed'));
     this.stopTimeupdate();
+    this.disarmQualityWatchdog();
     this.viewer.disconnect();
   }
 
@@ -537,7 +637,196 @@ class Player extends EventTarget implements PlayerHandle {
 
   setLatencyMs(ms: number): void { this.viewer.setLatencyMs(ms); }
 
-  setStream(name: string): void { this.viewer.setStream(name); }
+  setStream(name: string): void {
+    const rung = this.rungs !== null ? this.rungForStream(name) : null;
+    if (rung !== null) {
+      // A ladder stream: the switch rides the ladder machinery (selection
+      // follows, the watchdog protects it); a manual pick follows the host.
+      if (this.manualRung !== null) this.manualRung = rung;
+      this.switchToRung(rung, false);
+      return;
+    }
+    this.baseStream = name;
+    this.appliedStream = name;
+    if (this.rungs !== null) {
+      // Off-ladder: the name re-homes the ladder — it becomes the base and
+      // the source rung ('') names what plays next. No ladder switch.
+      this.benched.clear();
+      this.currentRung = '';
+      this.confirmedRung = '';
+      this.levels.select('');
+    }
+    this.viewer.setStream(name);
+  }
+
+  setRungs(rungs: string[] | null): void {
+    if (this.destroyed) return;
+    this.rungs = rungs === null
+      ? null
+      : [...new Set(rungs.map((s) => s.trim()).filter((s) => s !== ''))];
+    this.benched.clear();
+    this.disarmQualityWatchdog();
+    this.inFlight = false;
+    this.pendingAuto = false;
+    if (this.rungs === null) {
+      this.abrEngine = null;
+      this.manualRung = null;
+      this.currentRung = null;
+      this.confirmedRung = null;
+      this.levels.rebuild([]);
+      return;
+    }
+    this.abrEngine = this.abrEngine ?? createAbr();
+    const ladder = this.qualityLadder();
+    // A reconfigure keeps a manual pick that survives the new ladder and
+    // re-derives what is playing from the applied stream.
+    this.manualRung = this.manualRung !== null && ladder.includes(this.manualRung) ? this.manualRung : null;
+    this.currentRung = this.appliedStream !== undefined ? this.rungForStream(this.appliedStream) : null;
+    this.confirmedRung = this.confirmedRung !== null && ladder.includes(this.confirmedRung)
+      ? this.confirmedRung
+      : this.currentRung;
+    this.levels.rebuild(ladder);
+    this.levels.select(this.currentRung);
+  }
+
+  qualityLevels(): QualityLevelList {
+    return this.levels;
+  }
+
+  // --- Quality ladder internals ---
+
+  /** The effective ladder: the source rung ('') plus the configured rungs,
+   *  top-down; empty while no rungs are configured. */
+  private qualityLadder(): string[] {
+    return this.rungs !== null ? ['', ...this.rungs] : [];
+  }
+
+  private streamForRung(rung: string): string | undefined {
+    if (this.baseStream === undefined) return undefined;
+    return rung === '' ? this.baseStream : `${this.baseStream}_${rung}`;
+  }
+
+  /** The ladder rung a stream name maps to, or null when it is not a
+   *  ladder stream of the current base. */
+  private rungForStream(name: string): string | null {
+    if (this.baseStream === undefined) return null;
+    if (name === this.baseStream) return '';
+    for (const rung of this.rungs ?? []) {
+      if (name === `${this.baseStream}_${rung}`) return rung;
+    }
+    return null;
+  }
+
+  private switchToRung(rung: string, auto: boolean): void {
+    const target = this.streamForRung(rung);
+    if (target === undefined) return; // no known base to build a target from
+    const from = this.currentRung;
+    // An applied switch is an explicit retry of a benched rung.
+    this.benched.delete(rung);
+    this.currentRung = rung;
+    this.levels.select(rung);
+    if (target === this.appliedStream) return; // already on it — bookkeeping only
+    this.appliedStream = target;
+    this.inFlight = true;
+    this.pendingAuto = auto;
+    this.armQualityWatchdog();
+    this.emit('qualitychange', { from: from ?? '', to: rung, auto } satisfies PlayerQualityChangeDetail);
+    this.viewer.setStream(target);
+  }
+
+  /** One rung along the ladder (down = toward lower quality), clamped at
+   *  the ends and skipping rungs benched this session. */
+  private stepRung(delta: number): void {
+    const ladder = this.qualityLadder();
+    let i = this.currentRung === null ? -1 : ladder.indexOf(this.currentRung);
+    do {
+      i += delta;
+      if (i < 0 || i >= ladder.length) return;
+    } while (this.benched.has(ladder[i]));
+    this.switchToRung(ladder[i], true);
+  }
+
+  /** Feed one ~1 Hz stats sample to the ABR engine and apply a decision.
+   *  Everything that must not race a switch or a reconnect gates here (the
+   *  reference page's rules): manual mode, a switch awaiting its 'playing',
+   *  any non-connected state, pause, no known base. */
+  private abrTick(stats: StatsMsg): void {
+    if (this.rungs === null || this.abrEngine === null) return;
+    if (this.manualRung !== null) return;
+    if (this.inFlight) return;
+    if (this._state !== 'connected') return;
+    if (this._paused) return;
+    if (this.baseStream === undefined) return;
+    const decision = this.abrEngine.tick(
+      { rxData: stats.rxData, rxLoss: stats.rxLoss, rxDropped: stats.rxDropped },
+      performance.now(),
+    );
+    if (decision === 'down') this.stepRung(1);
+    else if (decision === 'up') this.stepRung(-1);
+  }
+
+  private armQualityWatchdog(): void {
+    this.disarmQualityWatchdog();
+    this.qualityTimer = setTimeout(() => {
+      this.qualityTimer = null;
+      this.onQualityTimeout();
+    }, QUALITY_SWITCH_TIMEOUT_MS);
+  }
+
+  private disarmQualityWatchdog(): void {
+    if (this.qualityTimer === null) return;
+    clearTimeout(this.qualityTimer);
+    this.qualityTimer = null;
+  }
+
+  /** The switched-to rung never confirmed with a 'playing' inside the
+   *  window: bench it for the session and revert to the last confirmed
+   *  rung. The revert rides the serial switch path but arms no watchdog of
+   *  its own (the reference page behaves the same); its own 'playing'
+   *  confirms it. */
+  private onQualityTimeout(): void {
+    const failed = this.currentRung;
+    if (failed !== null) this.benched.add(failed);
+    const back = this.confirmedRung ?? '';
+    if (this.manualRung === failed) this.manualRung = back;
+    this.currentRung = back;
+    this.levels.select(back);
+    const target = this.streamForRung(back)!;
+    this.emit('qualitychange', { from: failed ?? '', to: back, auto: this.pendingAuto } satisfies PlayerQualityChangeDetail);
+    this.appliedStream = target;
+    // inFlight stays set: decisions stay suspended until the revert's 'playing'.
+    this.viewer.setStream(target);
+  }
+
+  /** A connection reached its first frame ('playing'): the current rung is
+   *  confirmed and the switch window closes. */
+  private onQualityConfirmed(): void {
+    if (this.rungs === null) return;
+    this.disarmQualityWatchdog();
+    const wasAuto = this.inFlight && this.pendingAuto;
+    this.inFlight = false;
+    this.pendingAuto = false;
+    this.confirmedRung = this.currentRung;
+    if (wasAuto) this.abrEngine?.reset(); // fresh decision window after an ABR step
+  }
+
+  /** list.selectedIndex assignment: -1 re-engages auto (an explicit retry —
+   *  benched rungs are unbenched); a valid index is a manual pick, an
+   *  invalid one is ignored. */
+  private onSelectIndex(index: number): void {
+    if (this.destroyed) return;
+    if (index === -1) {
+      if (this.manualRung === null) return;
+      this.manualRung = null;
+      this.benched.clear();
+      this.abrEngine?.reset();
+      return;
+    }
+    const ladder = this.qualityLadder();
+    if (!Number.isInteger(index) || index < 0 || index >= ladder.length) return;
+    this.manualRung = ladder[index];
+    this.switchToRung(this.manualRung, false);
+  }
 
   setRenderPacing(enabled: boolean): void {
     // No-op in decodeInWorker mode (no renderer on main thread).
