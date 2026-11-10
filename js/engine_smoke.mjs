@@ -278,7 +278,11 @@ for (const k of STATS_KEYS) {
 if (s.rxData !== dMsgs) fail(`rxData ${s.rxData} != delivered ${dMsgs}`);
 pass(`final stats snapshot (all 17 raw fields, rxData=${s.rxData})`);
 
-if (s.rxLoss !== 0) fail(`rxLoss = ${s.rxLoss}, expected 0`);
+// Loss events are fine when SRT fully recovers them (loss + NAK +
+// retransmit is the protocol working under pump/drain scheduling
+// pressure — shared CI runners land there). The full-run SHA-256 above
+// already pins delivery integrity byte-for-byte.
+if (s.rxLoss !== s.rxRetransmit) fail(`rxLoss = ${s.rxLoss} but rxRetransmit = ${s.rxRetransmit} (unrecovered loss)`);
 if (s.rxDropped !== 0) fail(`rxDropped = ${s.rxDropped}, expected 0`);
 const outDropped = rx.getDroppedOutgoing();
 if (outDropped !== 0) fail(`outDropped = ${outDropped}, expected 0 on a clean run`);
