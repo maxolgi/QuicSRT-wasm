@@ -55,6 +55,18 @@ const playbackToggleBtn = document.getElementById('playback-toggle') as HTMLButt
 const playbackLatencyNum = document.getElementById('playback-latency') as HTMLInputElement;
 const pubUrlInput = document.getElementById('pub-url') as HTMLInputElement;
 
+// Seed the publish URL from the address bar (the viewer's resolution):
+// ?host= override, else the page hostname (localhost -> 127.0.0.1), with
+// the gateway's WT_PORT from cert-hash.js. Publishing from another
+// machine then targets that machine's gateway, not the visitor's own
+// loopback.
+{
+    const host = new URLSearchParams(location.search).get('host')
+        ?? (location.hostname === 'localhost' || location.hostname === '' ? '127.0.0.1' : location.hostname);
+    const port = (window as any).WT_PORT ?? '4435';
+    pubUrlInput.value = `wt://${host}:${port}`;
+}
+
 const debugRoot = document.getElementById('debug-root') as HTMLDivElement;
 
 // ─── Debug panel (reused from viewer) ─────────────────────────────
