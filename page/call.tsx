@@ -453,13 +453,15 @@ function handlePublishMsg(msg: PublishMsg, attemptGen: number) {
       failCall('Connection lost (SRT closed)');
       break;
     case 'wtClosed':
-      if (claimedSeat === 0 && !msg.error) {
-        // Clean WT close before the handshake — the seat is taken; the
-        // existing seat-fallback machinery handles it.
+      // Any close before the handshake — clean or errored — during a
+      // seat-1 claim is treated as a collision: the gateway's first-wins
+      // admission 403s the CONNECT for a held name, which surfaces here
+      // as an errored close. Only a failed seat-2 claim is terminal.
+      if (claimedSeat === 0 && (tryingSeat === 1 || !msg.error)) {
         handleClaimFailure(attemptGen);
       } else if (claimedSeat === 0) {
-        // wtClosed WITH an error = worker init failed (encoder
-        // unsupported, WT refused) — an honest failure, not a collision.
+        // A seat-2 claim that errors out is an honest failure (encoder
+        // unsupported, WT refused) — not a collision.
         failCall(`Publish failed: ${msg.error}`);
       } else {
         failCall(msg.error ? `WT closed: ${msg.error}` : 'WT closed');
