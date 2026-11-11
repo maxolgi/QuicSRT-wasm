@@ -12,12 +12,10 @@
 // stream and vice versa. Both seats taken → room full.
 // wasm deltas vs call.tsx: both workers are pre-bundled /bundle/ URLs
 // (no Vite new URL()) — mountPlayer gets workerUrl '/bundle/worker.js'
-// and the publish worker is '/bundle/publish_worker.js' — and the WT
-// endpoint is the same gateway-ingest default the publisher page ships
-// (wt://host:port shorthand for https://host:port/wt) instead of
-// ?host=/?port=/window.WT_PORT resolution; ?token= still passes through.
-// cert-hash.js is served same-origin by the gateway; window.CERT_HASH
-// pins the WT session (null hash = PKI mode, no pinning).
+// and the publish worker is '/bundle/publish_worker.js'; ?token= passes
+// through to the WT session. cert-hash.js is served same-origin by the
+// gateway; window.CERT_HASH pins the WT session (null hash = PKI mode,
+// no pinning).
 import { render } from 'preact';
 import { DebugStore } from './vendor/debug/store';
 import { DebugPanel } from './vendor/debug/components/Panel';
@@ -49,7 +47,16 @@ const AUDIO_CHANNELS = 2;
 // WT ingest endpoint — the same default the publisher page's url field
 // ships (the call page publishes to the same gateway; it has no editable
 // url field).
-const WT_ENDPOINT = 'wt://127.0.0.1:4435';
+// Gateway ingest endpoint, derived from the address bar (the viewer's
+// resolution) so calls joined from other machines reach the serving
+// gateway, not the visitor's own loopback.
+const WT_ENDPOINT = (() => {
+    const params = new URLSearchParams(location.search);
+    const host = params.get('host')
+        ?? (location.hostname === 'localhost' || location.hostname === '' ? '127.0.0.1' : location.hostname);
+    const port = params.get('port') ?? (window as any).WT_PORT ?? '4435';
+    return `wt://${host}:${port}`;
+})();
 
 // ─── DOM refs ─────────────────────────────────────────────────────
 
